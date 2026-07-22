@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Nexo | لوحة تحكم Abo-Lilah</title>
+    <!-- استدعاء ملف الـ CSS -->
+    <link rel="stylesheet" href="css/style.css">
+    <!-- استدعاء ملف الـ Manifest لتشغيله كتطبيق -->
+    <link rel="manifest" href="manifest.json">
+    <!-- مكتبة الأيقونات -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body>
+
+    <!-- القائمة الجانبية -->
+    <aside class="sidebar" id="sidebar">
+        <div class="sidebar-header">
+            <div class="logo-title">
+                <i class="fas fa-bolt" style="color: var(--primary-color);"></i> Nexo
+            </div>
+            <div class="logo-subtitle">
+                نظام متكامل لإدارة الصفحات والتواصل
+            </div>
+        </div>
+        <ul class="nav-links" id="navLinks">
+            <li class="active" data-target="dashboard-screen"><i class="fas fa-home"></i> الرئيسية</li>
+            <li data-target="companies-screen"><i class="fas fa-building"></i> إدارة الشركات <span class="badge admin-badge">Admin</span></li>
+            <li data-target="inbox-screen"><i class="fas fa-inbox"></i> صندوق الرسائل الموحد</li>
+            <li data-target="publisher-screen"><i class="fas fa-paper-plane"></i> الناشر الذكي</li>
+            <li data-target="analytics-screen"><i class="fas fa-chart-pie"></i> التحليلات الشاملة</li>
+        </ul>
+        <div class="sidebar-footer">
+            الإصدار الحالي: <strong>v1.0.0</strong>
+        </div>
+    </aside>
+
+    <!-- المحتوى الرئيسي -->
+    <div class="main-content">
+        <!-- الشريط العلوي -->
+        <header class="topbar">
+            <div class="topbar-right">
+                <i class="fas fa-bars menu-toggle" id="menuToggle"></i>
+                <h2 id="pageTitle" style="color: var(--text-dark); font-size: 18px;">الرئيسية</h2>
+            </div>
+
+            <div class="topbar-left">
+                <!-- مؤشرات النظام -->
+                <div class="system-indicators">
+                    <i class="fas fa-desktop device-icon" id="desktopIcon" title="وضع الكمبيوتر"></i>
+                    <i class="fas fa-mobile-alt device-icon" id="mobileIcon" title="وضع الموبايل"></i>
+                    <div class="divider"></div>
+                    <div class="network-status">
+                        <div class="status-dot" id="networkDot"></div>
+                        <span id="networkText">متصل</span>
+                    </div>
+                </div>
+
+                <!-- ملف المستخدم -->
+                <div class="user-profile">
+                    <div class="user-avatar"><i class="fas fa-user-tie"></i></div>
+                    <div class="user-info">
+                        <h4>Abo-Lilah</h4>
+                        <span>منشئ النظام (Super Admin)</span>
+                    </div>
+                </div>
+            </div>
+        </header>
+
+        <!-- منطقة العمل (الشاشات) -->
+        <main class="content-area">
+            
+            <!-- 1. شاشة الرئيسية -->
+            <div id="dashboard-screen" class="screen active">
+                <div class="card">
+                    <h2>مرحباً بك يا Abo-Lilah في نظام Nexo 🚀</h2>
+                    <p class="text-muted">نظامك الموحد للتحكم في كافة العمليات وإدارة الصفحات.</p>
+                </div>
+                <!-- إحصائيات سريعة كمثال لبيانات فرع -->
+                <div class="stats-grid" style="margin-top: 20px; display: flex; gap: 20px; flex-wrap: wrap;">
+                    <div class="card stat-card">
+                        <h3>الشركات النشطة</h3>
+                        <p class="stat-number">12</p>
+                        <small>من ضمنها: Insta - فرع المحلة</small>
+                    </div>
+                    <div class="card stat-card">
+                        <h3>الرسائل اليوم (AI)</h3>
+                        <p class="stat-number">340</p>
+                        <small style="color: var(--success);">+15% عن الأمس</small>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 2. شاشة صندوق الرسائل الموحد -->
+            <div id="inbox-screen" class="screen" style="display: none;">
+                <div class="card inbox-container">
+                    <div class="inbox-sidebar">
+                        <div class="chat-item active-chat">
+                            <h4>أحمد محمود (فيسبوك)</h4>
+                            <p>بكام الطرحة الشيفون؟</p>
+                        </div>
+                        <div class="chat-item">
+                            <h4>سارة علي (واتساب) <span class="badge warning-badge">شكوى</span></h4>
+                            <p>تأخير في التوصيل...</p>
+                        </div>
+                    </div>
+                    <div class="inbox-main">
+                        <div class="chat-history">
+                            <div class="message user-msg">بكام الطرحة الشيفون؟</div>
+                            <div class="message ai-msg">أهلاً بيك يا فندم! بـ 150 جنيه بس، تحب نحجزلك؟ 😉</div>
+                        </div>
+                        <div class="chat-input-area">
+                            <input type="text" placeholder="اكتب ردك اليدوي هنا (سيتم إيقاف الـ AI مؤقتاً)...">
+                            <button class="btn-primary"><i class="fas fa-paper-plane"></i></button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 3. شاشة الناشر الذكي -->
+            <div id="publisher-screen" class="screen" style="display: none;">
+                <div class="card">
+                    <h2>إنشاء بوست جديد وجدولته</h2>
+                    <textarea class="form-control" rows="4" placeholder="اكتب تفاصيل المنتج هنا..."></textarea>
+                    
+                    <div class="platforms-selection" style="margin: 20px 0;">
+                        <h4>حدد منصات النشر:</h4>
+                        <label><input type="checkbox" id="plat-fb" checked> فيسبوك</label>
+                        <label><input type="checkbox" id="plat-ig" checked> انستجرام</label>
+                        <label><input type="checkbox" id="plat-tg"> تليجرام</label>
+                        <label><input type="checkbox" id="plat-wa"> واتساب</label>
+                    </div>
+
+                    <div class="smart-links" style="margin-bottom: 20px; padding: 15px; background: #f8f9fa; border-radius: 8px;">
+                        <label>
+                            <input type="checkbox" id="smartLinksCheck">
+                            <strong>تفعيل الروابط الذكية (Smart Deep-Links)</strong>
+                        </label>
+                        <p class="text-muted" style="font-size: 12px;">سيقوم النظام بحذف رابط المنصة التي ينشر عليها تلقائياً لمنع التكرار.</p>
+                    </div>
+
+                    <button class="btn-primary" onclick="publishPost()">نشر الآن</button>
+                </div>
+            </div>
+
+        </main>
+    </div>
+
+    <!-- استدعاء ملف الجافاسكريبت -->
+    <script src="js/main.js"></script>
+</body>
+</html>

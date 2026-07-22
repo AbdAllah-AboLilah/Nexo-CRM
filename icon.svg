@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+    <!-- الخلفية المظلمة الأنيقة بحواف دائرية -->
+    <rect width="512" height="512" rx="110" fill="#1e1e2d"/>
+    
+    <!-- دائرة مضيئة خلف الشعار -->
+    <circle cx="256" cy="240" r="140" fill="#2b2b40"/>
+    
+    <!-- شعار علامة البرق باللون الأزرق الخاص بنظام Nexo -->
+    <path d="M310 90 L160 280 L260 280 L220 430 L390 210 L280 210 Z" fill="#4361ee"/>
+    
+    <!-- اسم النظام أسفل الشعار -->
+    <text x="256" y="470" font-family="'Segoe UI', Tahoma, sans-serif" font-size="45" font-weight="bold" fill="#ffffff" text-anchor="middle" letter-spacing="5">NEXO</text>
+</svg>

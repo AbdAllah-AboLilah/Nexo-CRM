@@ -1,0 +1,18 @@
+{
+  "name": "Nexo CRM - Abo-Lilah",
+  "short_name": "Nexo",
+  "description": "نظام متكامل لإدارة المبيعات والتواصل المتعدد.",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "background_color": "#1e1e2d",
+  "theme_color": "#4361ee",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "./icon.svg",
+      "sizes": "512x512",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
