@@ -3,14 +3,16 @@
 //  المفاتيح كلها في Firebase Secrets، مفيش أي مفتاح مكتوب في الكود
 // ============================================================
 const { onRequest, onCall, HttpsError } = require("firebase-functions/v2/https");
-const { onDocumentCreated } = require("firebase-functions/v2/firestore");
+const { onDocumentCreated, onDocumentUpdated } = require("firebase-functions/v2/firestore");
 const { onSchedule } = require("firebase-functions/v2/scheduler");
 const { defineSecret } = require("firebase-functions/params");
 const { setGlobalOptions, logger } = require("firebase-functions/v2");
 const admin = require("firebase-admin");
 
 const { encrypt, decrypt, verifyMetaSignature } = require("./lib/crypto");
-const { generateReply, assistPost, ping, ASSIST_TASKS } = require("./lib/ai");
+const { generateReply, assistPost, helpAnswer, ping, ASSIST_TASKS } = require("./lib/ai");
+const { buildKnowledgeText } = require("./lib/kb");
+const { notify, usersOf, usersAtLeast, superAdmins } = require("./lib/notify");
 const telegram = require("./lib/telegram");
 
 admin.initializeApp();
@@ -475,6 +477,20 @@ exports.runScheduledPosts = onSchedule(
           results,
           publishedAt: admin.firestore.FieldValue.serverTimestamp(),
         });
+
+        const preview = String(post.caption || "").slice(0, 70);
+        const failed = Object.entries(results).filter(([, v]) => String(v).startsWith("failed"));
+        await notify(await usersAtLeast(companyId, "manager"), anySent
+          ? {
+              type: "post_published",
+              title: "البوست نزل بنجاح ✅",
+              body: failed.length ? `${preview} — بس فشل على: ${failed.map(([p]) => p).join("، ")}` : preview,
+            }
+          : {
+              type: "post_failed",
+              title: "فشل نشر بوست ❌",
+              body: `${preview} — ${failed[0]?.[1] || "سبب غير معروف"}`,
+            });
       }
     }
   });
@@ -569,4 +585,288 @@ exports.aiAssistPost = onCall(async (req) => {
     logger.error("aiAssistPost failed", e);
     throw new HttpsError("internal", "تعذّر توليد النص: " + String(e.message).slice(0, 200));
   }
+});
+
+// ============================================================
+//  مركز المساعدة — المساعد الذكي
+// ============================================================
+exports.helpAssistant = onCall(async (req) => {
+  const profile = await requireProfile(req.auth);
+  const { question, companyId } = req.data || {};
+
+  if (!question || !String(question).trim())
+    throw new HttpsError("invalid-argument", "اكتب سؤالك.");
+  if (String(question).length > 1000)
+    throw new HttpsError("invalid-argument", "السؤال طويل جداً.");
+
+  const cid = companyId || profile.companyId;
+  assertCompanyAccess(profile, cid);
+
+  const companySnap = await db.doc(`companies/${cid}`).get();
+  if (!companySnap.exists) throw new HttpsError("not-found", "الشركة مش موجودة.");
+  const company = companySnap.data();
+
+  const ROLE_LABEL = {
+    superadmin: "منشئ النظام", owner: "صاحب المكان",
+    manager: "مدير سوشيال ميديا", agent: "موظف خدمة عملاء",
+  };
+
+  try {
+    const result = await helpAnswer({
+      question: String(question),
+      knowledge: buildKnowledgeText(company.features || {}),
+      companyName: company.name,
+      roleLabel: ROLE_LABEL[profile.role],
+    });
+
+    // نسجّل السؤال عشان نعرف الناس بتسأل في إيه
+    await db.collection(`companies/${cid}/helpLog`).add({
+      question: String(question).slice(0, 500),
+      resolved: result.resolved,
+      userId: profile.uid,
+      userName: profile.name || "",
+      at: admin.firestore.FieldValue.serverTimestamp(),
+    });
+
+    return result;
+  } catch (e) {
+    logger.error("helpAssistant failed", e);
+    throw new HttpsError("internal", "تعذّر الرد دلوقتي. جرّب تاني أو حوّل للدعم.");
+  }
+});
+
+// ============================================================
+//  الاقتراحات
+// ============================================================
+exports.submitSuggestion = onCall(async (req) => {
+  const profile = await requireProfile(req.auth);
+  const { text, companyId, source } = req.data || {};
+
+  if (!text || String(text).trim().length < 5)
+    throw new HttpsError("invalid-argument", "اكتب تفاصيل الاقتراح.");
+  if (String(text).length > 2000)
+    throw new HttpsError("invalid-argument", "النص طويل جداً.");
+
+  const cid = companyId || profile.companyId;
+  assertCompanyAccess(profile, cid);
+
+  const companySnap = await db.doc(`companies/${cid}`).get();
+  const companyName = companySnap.exists ? companySnap.data().name : "";
+
+  // منع التكرار: نفس المستخدم مايبعتش أكتر من 5 اقتراحات في الساعة
+  const hourAgo = new Date(Date.now() - 3600 * 1000);
+  const recent = await db.collection("suggestions")
+    .where("userId", "==", profile.uid)
+    .where("createdAt", ">=", hourAgo).count().get();
+  if (recent.data().count >= 5)
+    throw new HttpsError("resource-exhausted", "بعتت اقتراحات كتير في وقت قصير. استنى شوية.");
+
+  const ref = await db.collection("suggestions").add({
+    text: String(text).trim(),
+    companyId: cid,
+    companyName,
+    userId: profile.uid,
+    userName: profile.name || "",
+    userRole: profile.role,
+    source: source === "assistant" ? "assistant" : "manual",
+    status: "new",
+    adminNote: "",
+    createdAt: admin.firestore.FieldValue.serverTimestamp(),
+  });
+
+  await notify(await superAdmins(), {
+    type: "suggestion_new",
+    title: "اقتراح جديد من شركة",
+    body: `${companyName}: ${String(text).trim().slice(0, 90)}`,
+    meta: { suggestionId: ref.id, companyId: cid },
+  });
+
+  return { ok: true, id: ref.id };
+});
+
+exports.updateSuggestion = onCall(async (req) => {
+  const profile = await requireProfile(req.auth);
+  if (profile.role !== "superadmin")
+    throw new HttpsError("permission-denied", "لمنشئ النظام فقط.");
+
+  const { id, status, adminNote } = req.data || {};
+  const allowed = ["new", "reviewing", "done", "rejected"];
+  if (!id || !allowed.includes(status))
+    throw new HttpsError("invalid-argument", "بيانات ناقصة.");
+
+  const snap = await db.doc(`suggestions/${id}`).get();
+  if (!snap.exists) throw new HttpsError("not-found", "الاقتراح مش موجود.");
+  const sugg = snap.data();
+
+  await snap.ref.update({
+    status,
+    adminNote: String(adminNote || "").slice(0, 500),
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+  });
+
+  // نبلّغ صاحب الاقتراح لما حالته تتغير
+  if (sugg.status !== status) {
+    const LABEL = { reviewing: "قيد الدراسة", done: "تم التنفيذ ✅", rejected: "مش هيتنفذ حالياً" };
+    if (LABEL[status]) {
+      await notify([sugg.userId], {
+        type: "support_reply",
+        title: "تحديث على اقتراحك",
+        body: `${LABEL[status]} — ${String(sugg.text).slice(0, 70)}`,
+        link: "#/help",
+      });
+    }
+  }
+
+  return { ok: true };
+});
+
+// ============================================================
+//  شات الدعم (الشركة ↔ إدارة النظام)
+// ============================================================
+exports.sendSupportMessage = onCall(async (req) => {
+  const profile = await requireProfile(req.auth);
+  const { text, companyId } = req.data || {};
+
+  if (!text || !String(text).trim())
+    throw new HttpsError("invalid-argument", "اكتب رسالتك.");
+  if (String(text).length > 2000)
+    throw new HttpsError("invalid-argument", "الرسالة طويلة جداً.");
+
+  const isAdmin = profile.role === "superadmin";
+  const cid = isAdmin ? companyId : profile.companyId;
+  if (!cid) throw new HttpsError("invalid-argument", "مفيش شركة محددة.");
+  if (!isAdmin) assertCompanyAccess(profile, cid);
+
+  const companySnap = await db.doc(`companies/${cid}`).get();
+  if (!companySnap.exists) throw new HttpsError("not-found", "الشركة مش موجودة.");
+  const companyName = companySnap.data().name;
+
+  const threadRef = db.doc(`supportThreads/${cid}`);
+  const body = String(text).trim();
+
+  await threadRef.set({
+    companyId: cid,
+    companyName,
+    status: "open",
+    lastMessage: body.slice(0, 120),
+    lastMessageAt: admin.firestore.FieldValue.serverTimestamp(),
+    lastFrom: isAdmin ? "admin" : "company",
+    unreadForAdmin: isAdmin ? 0 : admin.firestore.FieldValue.increment(1),
+    unreadForCompany: isAdmin ? admin.firestore.FieldValue.increment(1) : 0,
+  }, { merge: true });
+
+  await threadRef.collection("messages").add({
+    from: isAdmin ? "admin" : "company",
+    text: body,
+    userId: profile.uid,
+    userName: profile.name || "",
+    createdAt: admin.firestore.FieldValue.serverTimestamp(),
+  });
+
+  if (isAdmin) {
+    await notify(await usersAtLeast(cid, "owner"), {
+      type: "support_reply",
+      title: "رد من دعم النظام",
+      body: body.slice(0, 90),
+      link: "#/help",
+    });
+  } else {
+    await notify(await superAdmins(), {
+      type: "support_message",
+      title: `رسالة دعم من ${companyName}`,
+      body: body.slice(0, 90),
+      meta: { companyId: cid },
+    });
+  }
+
+  return { ok: true };
+});
+
+/** تصفير عداد غير المقروء */
+exports.markSupportRead = onCall(async (req) => {
+  const profile = await requireProfile(req.auth);
+  const { companyId } = req.data || {};
+  const isAdmin = profile.role === "superadmin";
+  const cid = isAdmin ? companyId : profile.companyId;
+  if (!cid) return { ok: true };
+  if (!isAdmin) assertCompanyAccess(profile, cid);
+
+  await db.doc(`supportThreads/${cid}`).set(
+    isAdmin ? { unreadForAdmin: 0 } : { unreadForCompany: 0 }, { merge: true });
+  return { ok: true };
+});
+
+// ============================================================
+//  المشغّلات التلقائية للإشعارات
+// ============================================================
+
+/** طلب جديد → صاحب المكان ومدير السوشيال */
+exports.onOrderCreated = onDocumentCreated("companies/{companyId}/orders/{orderId}", async (event) => {
+  const order = event.data?.data();
+  if (!order) return;
+  const { companyId } = event.params;
+
+  await notify(await usersAtLeast(companyId, "manager"), {
+    type: "order_new",
+    title: "طلب جديد 🛍️",
+    body: `${order.customerName || "عميل"}${order.total ? ` — ${order.total} جنيه` : ""}`,
+    meta: { orderId: event.params.orderId },
+  });
+});
+
+/** محادثة اتحوّلت لتحتاج رد بشري، أو اتسجلت كشكوى */
+exports.onConversationFlagged = onDocumentUpdated(
+  "companies/{companyId}/conversations/{convId}",
+  async (event) => {
+    const before = event.data?.before?.data() || {};
+    const after = event.data?.after?.data() || {};
+    const { companyId } = event.params;
+
+    // شكوى جديدة
+    if (!before.isComplaint && after.isComplaint) {
+      await notify(await usersAtLeast(companyId, "agent"), {
+        type: "complaint_new",
+        title: "شكوى جديدة ⚠️",
+        body: `${after.customerName || "عميل"}: ${String(after.lastMessage || "").slice(0, 80)}`,
+      });
+      return;
+    }
+
+    // محتاجة تدخل بشري
+    if (before.status !== "needs_human" && after.status === "needs_human") {
+      await notify(await usersAtLeast(companyId, "agent"), {
+        type: "chat_assigned",
+        title: "محادثة محتاجة رد",
+        body: `${after.customerName || "عميل"}: ${String(after.lastMessage || "").slice(0, 80)}`,
+      });
+    }
+  });
+
+/** تعليق مسيء اتخفى */
+exports.onModerationLogged = onDocumentCreated(
+  "companies/{companyId}/moderationLog/{logId}",
+  async (event) => {
+    const entry = event.data?.data();
+    if (!entry) return;
+    await notify(await usersAtLeast(event.params.companyId, "manager"), {
+      type: "comment_hidden",
+      title: "تعليق غير لائق اتخفى تلقائياً 🛡️",
+      body: `${entry.customerName || "مستخدم"}: ${String(entry.text || "").slice(0, 70)}`,
+    });
+  });
+
+/** ربط أو فك ربط منصة → إشعار لمنشئ النظام */
+exports.onIntegrationChanged = onDocumentUpdated("companies/{companyId}", async (event) => {
+  const before = event.data?.before?.data() || {};
+  const after = event.data?.after?.data() || {};
+  const b = JSON.stringify(before.integrations || {});
+  const a = JSON.stringify(after.integrations || {});
+  if (b === a) return;
+
+  await notify(await superAdmins(), {
+    type: "integration_change",
+    title: "تغيير في ربط المنصات",
+    body: `${after.name || event.params.companyId} عدّلت ربط منصاتها`,
+    meta: { companyId: event.params.companyId },
+  });
 });

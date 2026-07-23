@@ -5,6 +5,7 @@ import { APP_VERSION, ROLES } from "./config.js";
 import { guard, session, logout, isSuper, switchTenant } from "./auth.js";
 import { onNetworkState, db, collection, getDocs, query, orderBy } from "./firebase.js";
 import { initRouter, buildNav, go, reloadCurrent } from "./router.js";
+import { initNotifications } from "./notifications.js";
 import { el, toast, modal, esc } from "./ui.js";
 
 const $ = (id) => document.getElementById(id);
@@ -61,6 +62,9 @@ const $ = (id) => document.getElementById(id);
   document.addEventListener("click", () => userMenu.classList.remove("show"));
   $("btnLogout").addEventListener("click", logout);
   $("btnAbout").addEventListener("click", showAbout);
+
+  // ---------- الإشعارات ----------
+  initNotifications({ button: $("notifBtn"), badge: $("notifBadge"), panel: $("notifPanel") });
 
   // ---------- التوجيه ----------
   initRouter({ mount: $("screen"), navMount: $("navLinks"), pageTitle: $("pageTitle") });

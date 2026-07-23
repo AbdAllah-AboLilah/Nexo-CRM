@@ -106,4 +106,6 @@ export const NAV = [
   { id: "analytics", label: "التحليلات والتقارير",    icon: "fa-chart-pie",     roles: ["superadmin","owner"] },
   { id: "users",     label: "المستخدمين والصلاحيات",  icon: "fa-users",         roles: ["superadmin","owner"] },
   { id: "settings",  label: "الثوابت وبيانات الشركة", icon: "fa-cog",           roles: ["superadmin","owner"] },
+  { id: "help",      label: "مركز المساعدة",          icon: "fa-circle-question", roles: ["superadmin","owner","manager","agent"] },
+  { id: "support",   label: "الدعم والاقتراحات",      icon: "fa-headset",       roles: ["superadmin"], badge: "Admin" },
 ];

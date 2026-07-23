@@ -46,6 +46,36 @@ service cloud.firestore {
                         && request.resource.data.companyId == resource.data.companyId
                         && request.resource.data.role != 'superadmin');
       allow delete: if isSuper();
+
+      // ---------- الإشعارات ----------
+      // كل واحد يشوف إشعاراته بس، والسيرفر هو اللي بينشئها
+      match /notifications/{nid} {
+        allow read: if signedIn() && request.auth.uid == uid;
+        // التعديل مسموح بس لتعليم الإشعار كمقروء
+        allow update: if signedIn() && request.auth.uid == uid
+                      && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['read']);
+        allow delete: if signedIn() && request.auth.uid == uid;
+        allow create: if false;
+      }
+    }
+
+    // ---------- الاقتراحات ----------
+    // الإنشاء والتعديل بيتم من Cloud Functions بس
+    match /suggestions/{sid} {
+      allow read: if isSuper()
+                  || (active() && resource.data.companyId == myCompany());
+      allow write: if false;
+    }
+
+    // ---------- شات الدعم ----------
+    match /supportThreads/{cid} {
+      allow read: if inCompany(cid);
+      allow write: if false;
+
+      match /messages/{mid} {
+        allow read: if inCompany(cid);
+        allow write: if false;
+      }
     }
 
     // ---------- الشركات ----------
@@ -100,6 +130,12 @@ service cloud.firestore {
 
       match /moderationLog/{lid} {
         allow read: if inCompany(cid) && roleAtLeast(60);
+        allow write: if false;
+      }
+
+      // سجل أسئلة المساعد الذكي (لمعرفة الناس بتسأل في إيه)
+      match /helpLog/{hid} {
+        allow read: if inCompany(cid) && roleAtLeast(80);
         allow write: if false;
       }
 

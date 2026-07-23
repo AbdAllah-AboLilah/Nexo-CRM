@@ -149,6 +149,57 @@ async function assistPost({ text, task, company }) {
   return String(res.text || "").trim();
 }
 
+// ---------- المساعد الذكي (دعم داخل النظام) ----------
+/**
+ * بيرد على أسئلة الشركة عن استخدام النظام — من دليل النظام فقط.
+ * بيرجّع: { answer, resolved, offerSupport, suggestedFeature }
+ */
+async function helpAnswer({ question, knowledge, companyName, roleLabel }) {
+  const ai = client();
+
+  const instruction = [
+    "أنت مساعد دعم فني لنظام Nexo — نظام إدارة صفحات وتواصل.",
+    `بتكلم مستخدم من شركة "${companyName || ""}" وصلاحيته: ${roleLabel || "مستخدم"}.`,
+    "",
+    "=== دليل النظام (المصدر الوحيد المسموح) ===",
+    knowledge,
+    "=== نهاية الدليل ===",
+    "",
+    "قواعد صارمة جداً:",
+    "1. ممنوع منعاً باتاً تخترع أي خطوة أو زرار أو شاشة مش مكتوبة في الدليل فوق.",
+    "2. لو السؤال ملوش إجابة واضحة في الدليل، قول بصراحة إنك مش متأكد واعرض تحويله للدعم.",
+    "3. لو الميزة مكتوب إنها «مش متاحة في باقتها»، قول كده بوضوح واعرض إنك تبعت طلب لإدارة النظام.",
+    "4. لو صلاحية المستخدم أقل من المطلوب، نبّهه إن ده محتاج صلاحية أعلى ويكلّم صاحب المكان.",
+    "5. رد بالعامية المصرية البسيطة، مختصر وعملي، والخطوات مرقّمة.",
+    "",
+    "رجّع JSON بالشكل ده بالظبط وبس:",
+    '{"answer":"الرد","resolved":true|false,"offerSupport":true|false,"suggestedFeature":"وصف مختصر للطلب أو نص فاضي"}',
+    "",
+    "- resolved = true لو لقيت الإجابة كاملة في الدليل.",
+    "- offerSupport = true لو مش متأكد أو الموضوع محتاج تدخل من إدارة النظام.",
+    "- suggestedFeature = وصف الطلب لو المستخدم بيطلب ميزة مش موجودة، وإلا سيبه فاضي.",
+  ].join("\n");
+
+  const res = await ai.models.generateContent({
+    model: "gemini-2.5-flash",
+    contents: question,
+    config: { systemInstruction: instruction, responseMimeType: "application/json", temperature: 0.3 },
+  });
+
+  const text = String(res.text || "").trim();
+  try {
+    const p = JSON.parse(text);
+    return {
+      answer: String(p.answer || "").trim(),
+      resolved: p.resolved === true,
+      offerSupport: p.offerSupport === true,
+      suggestedFeature: String(p.suggestedFeature || "").trim(),
+    };
+  } catch {
+    return { answer: text, resolved: false, offerSupport: true, suggestedFeature: "" };
+  }
+}
+
 /** اختبار سريع للتأكد إن الاتصال بـ Gemini شغال */
 async function ping() {
   const ai = client();
@@ -159,4 +210,7 @@ async function ping() {
   return String(r.text || "").trim();
 }
 
-module.exports = { buildSystemPrompt, generateReply, assistPost, ping, TONE_TEXT, ASSIST_TASKS, client };
+module.exports = {
+  buildSystemPrompt, generateReply, assistPost, helpAnswer, ping,
+  TONE_TEXT, ASSIST_TASKS, client,
+};

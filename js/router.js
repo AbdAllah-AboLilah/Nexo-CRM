@@ -16,6 +16,8 @@ const loaders = {
   analytics: () => import("./screens/analytics.js"),
   users:     () => import("./screens/users.js"),
   settings:  () => import("./screens/settings.js"),
+  help:      () => import("./screens/help.js"),
+  support:   () => import("./screens/support.js"),
 };
 
 let current = null;      // { id, mod }
@@ -77,7 +79,7 @@ export async function go(id, updateHash = true) {
   container.append(spinner());
 
   // كل الشاشات ما عدا "إدارة الشركات" محتاجة شركة مختارة
-  if (target.id !== "companies" && !session.companyId) {
+  if (!["companies", "support"].includes(target.id) && !session.companyId) {
     container.innerHTML = "";
     const btn = el("button", { class: "btn btn-primary", text: "اذهب لإدارة الشركات" });
     btn.addEventListener("click", () => go("companies"));
