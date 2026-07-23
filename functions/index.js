@@ -10,7 +10,7 @@ const { setGlobalOptions, logger } = require("firebase-functions/v2");
 const admin = require("firebase-admin");
 
 const { encrypt, decrypt, verifyMetaSignature } = require("./lib/crypto");
-const { generateReply } = require("./lib/ai");
+const { generateReply, ping } = require("./lib/ai");
 const telegram = require("./lib/telegram");
 
 admin.initializeApp();
@@ -19,8 +19,8 @@ const db = admin.firestore();
 setGlobalOptions({ region: "us-central1", maxInstances: 10 });
 
 // ---------- المفاتيح السرية ----------
-// تتضبط بالأمر:  firebase functions:secrets:set GEMINI_API_KEY
-const GEMINI_API_KEY   = defineSecret("GEMINI_API_KEY");
+// تتضبط بالأمر:  firebase functions:secrets:set <NAME>
+// ملحوظة: Gemini مش محتاج مفتاح — السيرفر بيتوثّق بهوية المشروع نفسه (ADC)
 const TOKEN_ENC_KEY    = defineSecret("TOKEN_ENC_KEY");
 const META_APP_SECRET  = defineSecret("META_APP_SECRET");
 const META_VERIFY_TOKEN = defineSecret("META_VERIFY_TOKEN");
@@ -180,7 +180,7 @@ exports.saveIntegration = onCall({ secrets: [TOKEN_ENC_KEY] }, async (req) => {
 //     ملاحظة: مش هيشتغل على صفحات العملاء غير بعد App Review
 // ============================================================
 exports.metaWebhook = onRequest(
-  { secrets: [GEMINI_API_KEY, TOKEN_ENC_KEY, META_APP_SECRET, META_VERIFY_TOKEN] },
+  { secrets: [TOKEN_ENC_KEY, META_APP_SECRET, META_VERIFY_TOKEN] },
   async (req, res) => {
     // --- التحقق الأولي من ميتا ---
     if (req.method === "GET") {
@@ -254,7 +254,7 @@ exports.metaWebhook = onRequest(
 //  4) ويب هوك تليجرام
 // ============================================================
 exports.telegramWebhook = onRequest(
-  { secrets: [GEMINI_API_KEY, TOKEN_ENC_KEY] },
+  { secrets: [TOKEN_ENC_KEY] },
   async (req, res) => {
     if (req.method !== "POST") return res.sendStatus(405);
 
@@ -339,7 +339,6 @@ async function handleIncoming({ company, platform, externalId, customerName, tex
   let result;
   try {
     result = await generateReply({
-      apiKey: GEMINI_API_KEY.value(),
       company, products, userMessage: text, history, channel,
     });
   } catch (e) {
@@ -501,3 +500,16 @@ async function findCompanyByPage(pageId) {
   if (snap.empty) return null;
   return { id: snap.docs[0].id, ...snap.docs[0].data() };
 }
+
+// ============================================================
+//  [مؤقتة] اختبار الاتصال بـ Gemini — هتتشال بعد التأكد
+// ============================================================
+exports.aiHealthCheck = onRequest(async (req, res) => {
+  if (req.query.t !== "ad9f816baad129e4fa043ec5") return res.sendStatus(403);
+  try {
+    const reply = await ping();
+    res.status(200).json({ ok: true, reply });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e.message).slice(0, 500) });
+  }
+});

@@ -48,11 +48,24 @@ function buildSystemPrompt(company, products = []) {
 }
 
 /**
+ * الاتصال بـ Gemini من غير أي API Key.
+ * السيرفر شغال جوه Google Cloud، فبيتوثّق بهوية المشروع نفسه (ADC).
+ * ميزة الطريقة دي: مفيش مفتاح يتسرب ولا يتغيّر ولا يتجدّد.
+ */
+function client() {
+  return new GoogleGenAI({
+    vertexai: true,
+    project: process.env.GCLOUD_PROJECT || process.env.GCP_PROJECT,
+    location: process.env.VERTEX_LOCATION || "us-central1",
+  });
+}
+
+/**
  * توليد رد + تصنيف
  * بيرجّع: { reply, intent, needsHuman, isComplaint, isAbusive }
  */
-async function generateReply({ apiKey, company, products, userMessage, history = [], channel = "message" }) {
-  const ai = new GoogleGenAI({ apiKey });
+async function generateReply({ company, products, userMessage, history = [], channel = "message" }) {
+  const ai = client();
 
   const context = history.slice(-6)
     .map((m) => `${m.from === "customer" ? "العميل" : "المتجر"}: ${m.text}`)
@@ -100,4 +113,14 @@ async function generateReply({ apiKey, company, products, userMessage, history =
   }
 }
 
-module.exports = { buildSystemPrompt, generateReply, TONE_TEXT };
+/** اختبار سريع للتأكد إن الاتصال بـ Gemini شغال */
+async function ping() {
+  const ai = client();
+  const r = await ai.models.generateContent({
+    model: "gemini-2.5-flash",
+    contents: "رد بكلمة واحدة بس: تمام",
+  });
+  return String(r.text || "").trim();
+}
+
+module.exports = { buildSystemPrompt, generateReply, ping, TONE_TEXT, client };
