@@ -1,0 +1,125 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // غيّر الإيميل ده لو غيّرت SUPER_ADMIN_EMAIL في js/config.js
+    function superEmail() { return 'admin@nexo.com'; }
+
+    function signedIn() { return request.auth != null; }
+    function myDoc()    { return /databases/$(database)/documents/users/$(request.auth.uid); }
+    function hasProfile() { return signedIn() && exists(myDoc()); }
+    function me()       { return get(myDoc()).data; }
+    function active()   { return hasProfile() && me().active != false; }
+
+    function isSuper() {
+      return signedIn() && (
+        request.auth.token.email == superEmail() ||
+        (hasProfile() && me().role == 'superadmin')
+      );
+    }
+
+    function myCompany() { return hasProfile() ? me().companyId : ''; }
+    function inCompany(cid) { return isSuper() || (active() && myCompany() == cid); }
+    function roleAtLeast(lvl) {
+      return isSuper() || (active() &&
+        (me().role == 'owner'   ? 80 :
+         me().role == 'manager' ? 60 :
+         me().role == 'agent'   ? 40 : 0) >= lvl);
+    }
+
+    // ---------- المستخدمون ----------
+    match /users/{uid} {
+      // كل واحد يقرأ نفسه؛ الأونر يقرأ مستخدمي شركته؛ السوبر يقرأ الكل
+      allow read: if isSuper()
+                  || (signedIn() && request.auth.uid == uid)
+                  || (roleAtLeast(80) && resource.data.companyId == myCompany());
+
+      // إنشاء حساب السوبر أدمن نفسه أول مرة فقط
+      allow create: if signedIn()
+                    && request.auth.uid == uid
+                    && request.auth.token.email == superEmail();
+
+      // باقي الإنشاء/التعديل بيتم من Cloud Functions (Admin SDK)
+      allow update: if isSuper()
+                    || (roleAtLeast(80)
+                        && resource.data.companyId == myCompany()
+                        && request.resource.data.companyId == resource.data.companyId
+                        && request.resource.data.role != 'superadmin');
+      allow delete: if isSuper();
+    }
+
+    // ---------- الشركات ----------
+    match /companies/{cid} {
+      allow read: if inCompany(cid);
+      allow create, delete: if isSuper();
+
+      // الأونر يعدّل الثوابت والذكاء الاصطناعي والشحن فقط،
+      // لكن ممنوع يلمس الميزات أو الباقة أو رقم الإصدار
+      allow update: if isSuper()
+                    || (inCompany(cid) && roleAtLeast(60)
+                        && !request.resource.data.diff(resource.data).affectedKeys()
+                             .hasAny(['features','plan','version','active','ownerId','integrations','pageIds']));
+
+      // ---------- التوكنات: ممنوع تماماً على العميل ----------
+      match /secrets/{doc} {
+        allow read, write: if false;   // Admin SDK فقط
+      }
+
+      match /products/{pid} {
+        allow read: if inCompany(cid);
+        allow write: if inCompany(cid) && roleAtLeast(60);
+      }
+
+      match /conversations/{convId} {
+        allow read: if inCompany(cid);
+        allow update: if inCompany(cid) && roleAtLeast(40);
+        allow create, delete: if isSuper();
+
+        match /messages/{mid} {
+          allow read: if inCompany(cid);
+          allow create: if inCompany(cid) && roleAtLeast(40)
+                        && request.resource.data.from in ['agent','note'];
+          allow update, delete: if isSuper();
+        }
+      }
+
+      match /orders/{oid} {
+        allow read: if inCompany(cid);
+        allow write: if inCompany(cid) && roleAtLeast(60);
+      }
+
+      match /posts/{pid} {
+        allow read: if inCompany(cid);
+        allow write: if inCompany(cid) && roleAtLeast(60);
+      }
+
+      match /stats/{sid} {
+        allow read: if inCompany(cid);
+        allow write: if false;         // السيرفر بس
+      }
+
+      match /moderationLog/{lid} {
+        allow read: if inCompany(cid) && roleAtLeast(60);
+        allow write: if false;
+      }
+
+      // سجل النشاط: ينكتب ومايتعدلش ومايتمسحش
+      match /auditLog/{aid} {
+        allow read: if inCompany(cid) && roleAtLeast(80);
+        allow create: if inCompany(cid);
+        allow update, delete: if false;
+      }
+    }
+
+    // ---------- إعدادات وإعلانات النظام ----------
+    match /system/{doc} {
+      allow read: if signedIn();
+      allow write: if isSuper();
+    }
+
+    // أي حاجة تانية → مرفوضة
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

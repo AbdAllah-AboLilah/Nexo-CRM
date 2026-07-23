@@ -1,0 +1,23 @@
+{
+  "name": "Nexo CRM",
+  "short_name": "Nexo",
+  "description": "نظام متكامل لإدارة الصفحات والتواصل",
+  "lang": "ar",
+  "dir": "rtl",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#1e1e2d",
+  "theme_color": "#1e1e2d",
+  "orientation": "any",
+  "categories": ["business", "productivity"],
+  "icons": [
+    { "src": "./icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
+    { "src": "./icon-maskable.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "maskable" }
+  ],
+  "shortcuts": [
+    { "name": "صندوق الرسائل", "url": "./index.html#/inbox" },
+    { "name": "الناشر الذكي", "url": "./index.html#/publisher" },
+    { "name": "الطلبات", "url": "./index.html#/orders" }
+  ]
+}

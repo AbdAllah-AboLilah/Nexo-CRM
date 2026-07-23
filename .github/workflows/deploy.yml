@@ -1,0 +1,29 @@
+name: Deploy to Firebase
+
+# بيشتغل أوتوماتيك مع أي تعديل على الفرع main
+# يعني تقدر تعدّل الكود من موقع GitHub على الموبايل، والنظام يتحدّث لوحده
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: تثبيت مكتبات السيرفر
+        run: npm ci --prefix functions || npm install --prefix functions
+
+      - name: رفع المشروع على Firebase
+        uses: FirebaseExtended/action-hosting-deploy@v0
+        with:
+          repoToken: ${{ secrets.GITHUB_TOKEN }}
+          firebaseServiceAccount: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          channelId: live
+          projectId: nexo-crm-28376
