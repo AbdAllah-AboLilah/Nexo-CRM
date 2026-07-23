@@ -34,6 +34,9 @@ self.addEventListener("activate", (e) => {
 self.addEventListener("fetch", (e) => {
   const url = new URL(e.request.url);
 
+  // رقم الإصدار دايماً من الشبكة عشان يبان التحديث فوراً
+  if (url.pathname.endsWith("/version.json")) return;
+
   // أي حاجة خاصة بفايربيز أو جوجل → من الشبكة مباشرة (Firestore بيتولى الأوفلاين بنفسه)
   if (url.hostname.includes("googleapis.com") ||
       url.hostname.includes("firebaseio.com") ||

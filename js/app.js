@@ -10,6 +10,22 @@ import { el, toast, modal, esc } from "./ui.js";
 
 const $ = (id) => document.getElementById(id);
 
+// رقم إصدار النظام — بيتولّد أوتوماتيك وقت الرفع (version.json)
+let SYSTEM_VERSION = { full: `v${APP_VERSION}`, build: 0, builtAt: "" };
+
+async function loadSystemVersion() {
+  try {
+    const res = await fetch("version.json", { cache: "no-cache" });
+    if (res.ok) SYSTEM_VERSION = await res.json();
+  } catch { /* أوفلاين — نستخدم رقم config */ }
+  // إصدار الشركة (لو موجود) بيتعرض له الأولوية، وإلا رقم النظام
+  const shown = session.company?.version || SYSTEM_VERSION.full;
+  $("appVersion").textContent = shown;
+  $("appVersion").title = SYSTEM_VERSION.builtAt
+    ? `إصدار النظام: ${SYSTEM_VERSION.full} · ${SYSTEM_VERSION.builtAt}` : "";
+}
+window.nexoSystemVersion = () => SYSTEM_VERSION;
+
 (async function boot() {
   await guard();
 
@@ -17,7 +33,7 @@ const $ = (id) => document.getElementById(id);
   $("userName").textContent = session.profile.name || session.user.email;
   $("userRole").textContent = ROLES[session.profile.role]?.label || "";
   $("userAvatar").textContent = (session.profile.name || "N").trim().charAt(0).toUpperCase();
-  $("appVersion").textContent = session.company?.version || APP_VERSION;
+  loadSystemVersion();
 
   renderTenantChip();
 
@@ -80,7 +96,7 @@ const $ = (id) => document.getElementById(id);
   window.nexoRefreshShell = () => {
     renderTenantChip();
     buildNav();
-    $("appVersion").textContent = session.company?.version || APP_VERSION;
+    loadSystemVersion();
   };
 
   document.body.classList.remove("booting");
@@ -132,8 +148,9 @@ function showAbout() {
       <div class="about-logo"><i class="fas fa-bolt"></i></div>
       <h3>Nexo CRM</h3>
       <p class="text-muted">نظام متكامل لإدارة الصفحات والتواصل</p>
-      <div class="kv"><span>إصدار النظام</span><strong>v${APP_VERSION}</strong></div>
-      <div class="kv"><span>إصدار الشركة</span><strong>${esc(session.company?.version || "—")}</strong></div>
+      <div class="kv"><span>إصدار النظام</span><strong>${esc(SYSTEM_VERSION.full)}${SYSTEM_VERSION.build ? ` · build ${SYSTEM_VERSION.build}` : ""}</strong></div>
+      <div class="kv"><span>تاريخ آخر تحديث</span><strong>${esc(SYSTEM_VERSION.builtAt || "—")}</strong></div>
+      <div class="kv"><span>إصدار الشركة</span><strong>${esc(session.company?.version || "متابع للنظام")}</strong></div>
       <div class="kv"><span>المستخدم</span><strong>${esc(session.user.email)}</strong></div>
       <div class="kv"><span>الصلاحية</span><strong>${esc(ROLES[session.profile.role]?.label || "")}</strong></div>
     </div>`,

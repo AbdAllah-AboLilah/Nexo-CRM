@@ -65,22 +65,31 @@ async function load(body) {
       .map(([, p]) => `<i class="${p.icon}" style="color:${p.color};font-size:15px" title="${p.label}"></i>`)
       .join(" ") || '<span class="text-muted" style="font-size:12px">—</span>';
 
+    const versionCell = c.version
+      ? `<code>${esc(c.version)}</code>${c.version !== sysVersion()
+          ? ' <span class="badge badge-yellow" style="margin-inline-start:4px">قديم</span>' : ""}`
+      : `<code class="text-muted">${esc(sysVersion())}</code> <span class="badge badge-gray" style="margin-inline-start:4px">متابع</span>`;
+
     const tr = el("tr");
     tr.innerHTML = `
       <td><strong>${esc(c.name)}</strong><br><small class="text-muted">${esc(c.businessType || "")}</small></td>
       <td><span class="badge badge-blue">${esc(c.plan || "Basic")}</span></td>
       <td>${platforms}</td>
-      <td><code>${esc(c.version || APP_VERSION)}</code></td>
+      <td>${versionCell}</td>`;
       <td>${c.active === false ? '<span class="badge badge-red">موقوفة</span>' : '<span class="badge badge-green">نشطة</span>'}</td>
       <td class="text-muted" style="font-size:12px">${fmtDate(c.createdAt)}</td>`;
 
     const actions = el("td");
     const box = el("div", { class: "row-actions" });
+    const behind = c.version && sysVersion() && c.version !== sysVersion();
     box.append(
       btn("دخول", "btn-primary btn-sm", "fa-right-to-bracket", async () => {
         await window.nexoSwitchTenant(c.id);
         toast(`دلوقتي شغال على: ${c.name}`, "success");
       }),
+      behind
+        ? btn("تحديث", "btn-success btn-sm", "fa-arrow-up", () => pushUpdate(c))
+        : null,
       btn("", "btn-light btn-sm", "fa-sliders", () => featuresForm(c)),
       btn("", "btn-light btn-sm", "fa-pen", () => companyForm(c)),
       btn("", "btn-light btn-sm", "fa-trash", () => removeCompany(c)),
@@ -104,7 +113,7 @@ function companyForm(existing = null) {
     label: "الباقة", name: "plan", type: "select", value: existing?.plan || "Basic",
     options: [{ value: "Basic", label: "أساسية" }, { value: "Pro", label: "متقدمة" }, { value: "VIP", label: "VIP" }],
   });
-  const version = field({ label: "رقم الإصدار", name: "version", value: existing?.version || APP_VERSION, hint: "ده اللي هيظهر في لوحة الشركة تحت في القائمة الجانبية" });
+  const version = field({ label: "رقم الإصدار", name: "version", value: existing?.version || "", placeholder: "سيبها فاضية = تتابع النظام تلقائياً", hint: "سيبها فاضية عشان الشركة تشوف آخر إصدار دايماً، أو ثبّت رقم معيّن لو عايز." });
   const active = toggle({ label: "الشركة نشطة", name: "active", checked: existing ? existing.active !== false : true, hint: "لو أوقفتها، مستخدميها مش هيقدروا يدخلوا" });
 
   form.append(name.wrap, type.wrap, el("div", { class: "form-row" }, [plan.wrap, version.wrap]), active.row);
@@ -121,7 +130,7 @@ function companyForm(existing = null) {
             name: name.input.value.trim(),
             businessType: type.input.value.trim(),
             plan: plan.input.value,
-            version: version.input.value.trim() || APP_VERSION,
+            version: version.input.value.trim() || null,  // فاضي = تتابع النظام
             active: active.input.checked,
           };
           if (!payload.name) return toast("اكتب اسم الشركة", "error");
@@ -243,6 +252,26 @@ function btn(label, cls, icon, onClick) {
   const b = el("button", { class: `btn ${cls}` }, [icon ? el("i", { class: `fas ${icon}` }) : null, label || null]);
   b.addEventListener("click", onClick);
   return b;
+}
+
+/** رقم إصدار النظام الحالي (من version.json عبر الـ shell) */
+function sysVersion() {
+  try { return window.nexoSystemVersion?.().full || `v${APP_VERSION}`; }
+  catch { return `v${APP_VERSION}`; }
+}
+
+/** إرسال آخر إصدار لشركة معينة (بيثبّت رقمها على إصدار النظام الحالي) */
+async function pushUpdate(c) {
+  const target = sysVersion();
+  const ok = await confirmBox(
+    `هتحدّث "${c.name}" لإصدار ${target}.\n\nملحوظة: التحديث الفعلي للكود بيوصل لكل الشركات مع الرفع؛ الرقم ده مؤشر إداري بيقولك إنك راجعت الشركة دي على الإصدار الجديد.`,
+    { title: "إرسال تحديث", danger: false });
+  if (!ok) return;
+  try {
+    await updateDoc(doc(db, "companies", c.id), { version: target });
+    toast(`تم تحديث ${c.name} لإصدار ${target}`, "success");
+    reload();
+  } catch (e) { toast("فشل التحديث: " + e.message, "error"); }
 }
 
 function reload() { import("../router.js").then((r) => r.reloadCurrent()); }

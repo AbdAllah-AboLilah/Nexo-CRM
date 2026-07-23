@@ -74,3 +74,6 @@ node_modules/
 *.local
 .DS_Store
 Thumbs.db
+
+# رقم الإصدار بيتولّد أوتوماتيك وقت الرفع
+version.json
