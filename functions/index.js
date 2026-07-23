@@ -502,14 +502,16 @@ async function findCompanyByPage(pageId) {
 }
 
 // ============================================================
-//  [مؤقتة] اختبار الاتصال بـ Gemini — هتتشال بعد التأكد
+//  اختبار الاتصال بالذكاء الاصطناعي (زرار في شاشة إعدادات AI)
 // ============================================================
-exports.aiHealthCheck = onRequest(async (req, res) => {
-  if (req.query.t !== "ad9f816baad129e4fa043ec5") return res.sendStatus(403);
+exports.aiHealthCheck = onCall(async (req) => {
+  const profile = await requireProfile(req.auth);
+  if (level(profile.role) < level("manager"))
+    throw new HttpsError("permission-denied", "مش مسموح لك.");
   try {
     const reply = await ping();
-    res.status(200).json({ ok: true, reply });
+    return { ok: true, reply };
   } catch (e) {
-    res.status(500).json({ ok: false, error: String(e.message).slice(0, 500) });
+    return { ok: false, error: String(e.message).slice(0, 300) };
   }
 });

@@ -1,7 +1,7 @@
 // ============================================================
 //  إعدادات الذكاء الاصطناعي (الشخصية / النبرة / قوالب الردود)
 // ============================================================
-import { db, doc, updateDoc } from "../firebase.js";
+import { db, doc, updateDoc, fns, httpsCallable } from "../firebase.js";
 import { session, refreshCompany, atLeast } from "../auth.js";
 import { AI_TONES, DEFAULT_AI } from "../config.js";
 import { el, card, esc, toast, field, toggle } from "../ui.js";
@@ -19,13 +19,39 @@ export async function render(root) {
     ]),
   ]));
 
-  // ---------- التفعيل ----------
+  // ---------- التفعيل + اختبار الاتصال ----------
   const enableBox = card("");
   const enabled = toggle({
     label: "تفعيل الرد الآلي", name: "aiEnabled", checked: ai.enabled !== false,
     hint: "لو قفلته، كل الرسائل هتتحوّل لصندوق الرسائل عشان ترد عليها يدوي",
   });
   enableBox.append(enabled.row);
+
+  const testRow = el("div", { style: "display:flex;align-items:center;gap:12px;margin-top:14px;flex-wrap:wrap" });
+  const testBtn = el("button", { class: "btn btn-ghost", html: '<i class="fas fa-plug-circle-check"></i> اختبار الاتصال' });
+  const testResult = el("span", { class: "text-muted", style: "font-size:13px" });
+  testBtn.addEventListener("click", async () => {
+    testBtn.disabled = true;
+    testResult.textContent = "جاري الاختبار...";
+    testResult.style.color = "";
+    try {
+      const res = await httpsCallable(fns, "aiHealthCheck")();
+      const d = res.data || {};
+      if (d.ok) {
+        testResult.textContent = `✅ الاتصال شغال — رد الذكاء الاصطناعي: "${d.reply}"`;
+        testResult.style.color = "var(--success)";
+      } else {
+        testResult.textContent = "❌ " + (d.error || "فشل الاتصال");
+        testResult.style.color = "var(--danger)";
+      }
+    } catch (e) {
+      testResult.textContent = "❌ " + (e.message || "تعذّر الاتصال بالسيرفر");
+      testResult.style.color = "var(--danger)";
+    }
+    testBtn.disabled = false;
+  });
+  testRow.append(testBtn, testResult);
+  enableBox.append(testRow);
   root.append(enableBox);
 
   // ---------- النبرة ----------
