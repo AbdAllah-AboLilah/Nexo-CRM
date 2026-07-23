@@ -4,11 +4,15 @@
 import {
   db, collection, doc, addDoc, getDocs, deleteDoc, updateDoc,
   query, orderBy, limit, serverTimestamp,
+  storage, storageRef, uploadBytesResumable, getDownloadURL, deleteObject,
+  fns, httpsCallable,
 } from "../firebase.js";
 import { session, tenantPath, hasFeature } from "../auth.js";
 import { PLATFORMS } from "../config.js";
 import { el, card, esc, toast, field, confirmBox, fmtDateTime, emptyState, spinner } from "../ui.js";
 import { buildLinks } from "./settings.js";
+
+const MAX_FILE_MB = 50;
 
 let state = {
   caption: "",
@@ -18,6 +22,8 @@ let state = {
   productName: "",
   scheduleAt: "",
   previewMobile: false,
+  media: [],        // [{ url, path, type, name }]
+  lastCaption: null, // للتراجع عن مساعدة الذكاء الاصطناعي
 };
 
 export async function render(root) {
@@ -41,8 +47,83 @@ export async function render(root) {
   // ---------- المحرر ----------
   const editor = card("محتوى البوست");
   const caption = el("textarea", { class: "form-control", rows: 6, placeholder: "اكتب الكابشن بتاعك هنا..." });
-  caption.addEventListener("input", () => { state.caption = caption.value; refresh(); });
+  caption.addEventListener("input", () => { state.caption = caption.value; state.lastCaption = null; renderUndo(); refresh(); });
   editor.append(caption);
+
+  // ---------- مساعد الكتابة بالذكاء الاصطناعي ----------
+  const aiBar = el("div", { style: "margin-top:12px" });
+  const aiTitle = el("div", { style: "display:flex;align-items:center;gap:8px;margin-bottom:9px" }, [
+    el("i", { class: "fas fa-wand-magic-sparkles", style: "color:var(--primary);font-size:13px" }),
+    el("strong", { style: "font-size:13px", text: "مساعد الكتابة" }),
+  ]);
+  const aiBtns = el("div", { class: "quick-actions" });
+  const undoWrap = el("span");
+
+  const TASKS = [
+    { id: "fix",       label: "تصحيح لغوي",  icon: "fa-spell-check" },
+    { id: "improve",   label: "تحسين الصياغة", icon: "fa-pen-nib" },
+    { id: "emoji",     label: "إضافة إيموجي", icon: "fa-face-smile" },
+    { id: "marketing", label: "أسلوب تسويقي", icon: "fa-bullhorn" },
+    { id: "shorten",   label: "اختصار",       icon: "fa-compress" },
+    { id: "expand",    label: "توسيع",        icon: "fa-expand" },
+    { id: "hashtags",  label: "هاشتاجات",     icon: "fa-hashtag" },
+  ];
+
+  const aiEnabled = hasFeature("canUseAI");
+  TASKS.forEach((t) => {
+    const b = el("button", { class: "chip", html: `<i class="fas ${t.icon}"></i> ${t.label}` });
+    b.disabled = !aiEnabled;
+    b.addEventListener("click", () => runAssist(t, b));
+    aiBtns.append(b);
+  });
+  aiBar.append(aiTitle, aiBtns, undoWrap);
+  if (!aiEnabled) aiBar.append(el("small", { class: "hint", text: "ميزة الذكاء الاصطناعي مقفولة لباقة الشركة." }));
+  editor.append(aiBar);
+
+  function renderUndo() {
+    undoWrap.innerHTML = "";
+    if (!state.lastCaption) return;
+    const u = el("button", { class: "chip", style: "background:#fff3d6;color:#8a6100",
+      html: '<i class="fas fa-rotate-left"></i> تراجع عن آخر تعديل' });
+    u.addEventListener("click", () => {
+      caption.value = state.lastCaption;
+      state.caption = state.lastCaption;
+      state.lastCaption = null;
+      renderUndo();
+      refresh();
+      toast("تم التراجع", "info");
+    });
+    undoWrap.append(u);
+  }
+
+  async function runAssist(task, btn) {
+    const text = caption.value.trim();
+    if (!text) return toast("اكتب نص البوست الأول", "warn");
+
+    const original = btn.innerHTML;
+    btn.disabled = true;
+    btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> جاري...';
+    aiBtns.querySelectorAll("button").forEach((b) => (b.disabled = true));
+
+    try {
+      const res = await httpsCallable(fns, "aiAssistPost")({
+        text, task: task.id, companyId: session.companyId,
+      });
+      const out = (res.data?.text || "").trim();
+      if (!out) throw new Error("رد فاضي");
+      state.lastCaption = text;
+      caption.value = out;
+      state.caption = out;
+      renderUndo();
+      refresh();
+      toast(`تم: ${task.label}`, "success");
+    } catch (e) {
+      toast("فشل: " + (e.message || "تعذّر الاتصال"), "error");
+    }
+
+    btn.innerHTML = original;
+    aiBtns.querySelectorAll("button").forEach((b) => (b.disabled = !aiEnabled));
+  }
 
   const prodRow = el("div", { class: "form-row", style: "margin-top:14px" });
   const productName = field({ label: "المنتج المرتبط (اختياري)", name: "product", placeholder: "طرحة كريب مضلع" });
@@ -53,6 +134,112 @@ export async function render(root) {
   editor.append(prodRow);
   editor.append(el("p", { class: "hint", text: "السعر ده بيتربط بالبوست، فلما حد يعلق «بكام؟» البوت يرد بالسعر الصح للبوست ده تحديداً." }));
   left.append(editor);
+
+  // ---------- الصور والفيديو ----------
+  const mediaBox = card("الصور والفيديو");
+  const mediaGrid = el("div", { class: "media-grid" });
+  const fileInput = el("input", { type: "file", accept: "image/*,video/*", multiple: true, style: "display:none" });
+  const drop = el("div", { class: "file-drop" }, [
+    el("i", { class: "fas fa-images" }),
+    el("strong", { text: "اضغط لاختيار صور أو فيديو" }),
+    el("p", { class: "hint", text: `تقدر تختار أكتر من ملف · الحد الأقصى ${MAX_FILE_MB} ميجا للملف` }),
+  ]);
+
+  drop.addEventListener("click", () => fileInput.click());
+  drop.addEventListener("dragover", (e) => { e.preventDefault(); drop.classList.add("over"); });
+  drop.addEventListener("dragleave", () => drop.classList.remove("over"));
+  drop.addEventListener("drop", (e) => {
+    e.preventDefault(); drop.classList.remove("over");
+    handleFiles(e.dataTransfer.files);
+  });
+  fileInput.addEventListener("change", () => { handleFiles(fileInput.files); fileInput.value = ""; });
+
+  mediaBox.append(mediaGrid, drop, fileInput);
+  left.append(mediaBox);
+
+  function drawMedia() {
+    mediaGrid.innerHTML = "";
+    state.media.forEach((m, i) => {
+      const thumb = el("div", { class: "media-item" });
+      if (m.uploading) {
+        thumb.classList.add("uploading");
+        thumb.append(
+          el("div", { class: "media-progress" }, [el("div", { class: "media-bar", style: `width:${m.progress || 0}%` })]),
+          el("span", { class: "media-pct", text: `${m.progress || 0}%` }),
+        );
+      } else {
+        thumb.append(m.type === "video"
+          ? el("video", { src: m.url, muted: "true" })
+          : el("img", { src: m.url, alt: m.name }));
+        const del = el("button", { class: "media-del", html: '<i class="fas fa-xmark"></i>', title: "حذف" });
+        del.addEventListener("click", async (e) => {
+          e.stopPropagation();
+          if (!(await confirmBox("هتشيل الملف ده من البوست؟", { title: "حذف ملف" }))) return;
+          try { await deleteObject(storageRef(storage, m.path)); } catch { /* الملف ممكن يكون اتمسح */ }
+          state.media.splice(i, 1);
+          drawMedia(); refresh();
+        });
+        thumb.append(del);
+        if (m.type === "video") thumb.append(el("span", { class: "media-badge", html: '<i class="fas fa-play"></i>' }));
+      }
+      mediaGrid.append(thumb);
+    });
+    drop.style.display = state.media.length >= 10 ? "none" : "";
+  }
+
+  function handleFiles(fileList) {
+    const files = [...(fileList || [])];
+    if (state.media.length + files.length > 10) return toast("أقصى عدد 10 ملفات للبوست", "warn");
+
+    files.forEach((file) => {
+      if (file.size > MAX_FILE_MB * 1024 * 1024)
+        return toast(`"${file.name}" أكبر من ${MAX_FILE_MB} ميجا`, "error");
+      if (!/^(image|video)\//.test(file.type))
+        return toast(`"${file.name}" مش صورة ولا فيديو`, "error");
+
+      const item = {
+        uploading: true, progress: 0,
+        type: file.type.startsWith("video") ? "video" : "image",
+        name: file.name,
+      };
+      state.media.push(item);
+      drawMedia();
+      uploadFile(file, item);
+    });
+  }
+
+  function uploadFile(file, item) {
+    const safe = file.name.replace(/[^\w.\-]/g, "_").slice(-60);
+    const path = `companies/${session.companyId}/posts/${Date.now()}_${Math.random().toString(36).slice(2, 7)}_${safe}`;
+    const task = uploadBytesResumable(storageRef(storage, path), file, { contentType: file.type });
+
+    task.on("state_changed",
+      (snap) => {
+        item.progress = Math.round((snap.bytesTransferred / snap.totalBytes) * 100);
+        drawMedia();
+      },
+      (err) => {
+        toast(uploadError(err), "error");
+        const i = state.media.indexOf(item);
+        if (i > -1) state.media.splice(i, 1);
+        drawMedia();
+      },
+      async () => {
+        item.url = await getDownloadURL(task.snapshot.ref);
+        item.path = path;
+        item.uploading = false;
+        drawMedia(); refresh();
+        toast("تم رفع " + item.name, "success");
+      });
+  }
+
+  function uploadError(err) {
+    const c = err?.code || "";
+    if (c.includes("unauthorized")) return "مش مسموح لك برفع ملفات — راجع صلاحياتك.";
+    if (c.includes("retry-limit") || c.includes("canceled")) return "الرفع فشل — راجع الإنترنت وحاول تاني.";
+    if (c.includes("unknown")) return "خدمة التخزين لسه مش مفعّلة في المشروع.";
+    return "فشل الرفع: " + (err?.message || c);
+  }
 
   // ---------- المنصات ----------
   const platBox = card("منصات النشر");
@@ -161,6 +348,17 @@ export async function render(root) {
     ]));
     phone.append(el("div", { class: "preview-body", text: composeText(target) || "اكتب الكابشن عشان تشوف المعاينة..." }));
 
+    const ready = state.media.filter((m) => !m.uploading && m.url);
+    if (ready.length) {
+      const grid = el("div", { class: "preview-media" });
+      ready.forEach((m) => {
+        grid.append(m.type === "video"
+          ? el("video", { src: m.url, controls: "true" })
+          : el("img", { src: m.url, alt: "" }));
+      });
+      phone.append(grid);
+    }
+
     if (active.length > 1) {
       phone.append(el("div", { class: "hint", style: "padding:0 14px 14px",
         text: `هينزل على ${active.length} منصات، وكل واحدة هتاخد نسخة مظبوطة عليها.` }));
@@ -195,9 +393,14 @@ async function submit(status) {
   const active = Object.entries(state.platforms).filter(([, v]) => v).map(([k]) => k);
   if (!state.caption.trim()) return toast("اكتب محتوى البوست الأول", "error");
   if (status === "queued" && !active.length) return toast("اختار منصة واحدة على الأقل", "error");
+  if (state.media.some((m) => m.uploading)) return toast("استنى لحد ما رفع الملفات يخلص", "warn");
 
   const versions = {};
   active.forEach((p) => { versions[p] = composeText(p); });
+
+  const media = state.media
+    .filter((m) => m.url && m.path)
+    .map(({ url, path, type, name }) => ({ url, path, type, name }));
 
   try {
     await addDoc(collection(db, ...tenantPath("posts")), {
@@ -207,6 +410,7 @@ async function submit(status) {
       platforms: active,
       attach: { ...state.attach },
       versions,
+      media,
       status,                                   // draft | queued | published | failed
       scheduledAt: state.scheduleAt ? new Date(state.scheduleAt) : null,
       createdAt: serverTimestamp(),
@@ -267,5 +471,6 @@ function mkToggleBtn(icon, active) {
 export function destroy() {
   state = { caption: "", platforms: { facebook: false, instagram: false, telegram: false, whatsapp: false },
     attach: { address: false, hours: false, phones: false, links: false, price: false },
-    price: "", productName: "", scheduleAt: "", previewMobile: false };
+    price: "", productName: "", scheduleAt: "", previewMobile: false,
+    media: [], lastCaption: null };
 }

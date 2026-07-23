@@ -1,0 +1,42 @@
+rules_version = '2';
+
+// ملفات البوستات (صور وفيديو) — كل شركة في مجلدها
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    function signedIn() { return request.auth != null; }
+
+    function myProfile() {
+      return firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data;
+    }
+
+    function inCompany(cid) {
+      return signedIn()
+        && firestore.exists(/databases/(default)/documents/users/$(request.auth.uid))
+        && myProfile().active != false
+        && (myProfile().role == 'superadmin' || myProfile().companyId == cid);
+    }
+
+    function canPublish(cid) {
+      return inCompany(cid)
+        && myProfile().role in ['superadmin', 'owner', 'manager'];
+    }
+
+    match /companies/{companyId}/posts/{fileName} {
+      // القراءة مفتوحة عشان المنصات (تليجرام/ميتا) تقدر تجيب الصورة من اللينك
+      allow read: if true;
+
+      allow write: if canPublish(companyId)
+                   && request.resource.size < 60 * 1024 * 1024
+                   && (request.resource.contentType.matches('image/.*')
+                       || request.resource.contentType.matches('video/.*'));
+
+      allow delete: if canPublish(companyId);
+    }
+
+    // أي مسار تاني مقفول
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

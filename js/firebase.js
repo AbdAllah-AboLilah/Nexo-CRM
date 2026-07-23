@@ -14,6 +14,9 @@ import {
   writeBatch, collectionGroup, onSnapshotsInSync, Timestamp,
 } from "https://www.gstatic.com/firebasejs/12.16.0/firebase-firestore.js";
 import { getFunctions, httpsCallable } from "https://www.gstatic.com/firebasejs/12.16.0/firebase-functions.js";
+import {
+  getStorage, ref as storageRef, uploadBytesResumable, getDownloadURL, deleteObject,
+} from "https://www.gstatic.com/firebasejs/12.16.0/firebase-storage.js";
 
 import { firebaseConfig } from "./config.js";
 
@@ -26,6 +29,7 @@ export const db = initializeFirestore(app, {
 });
 
 export const fns = getFunctions(app, "us-central1");
+export const storage = getStorage(app);
 
 setPersistence(auth, browserLocalPersistence).catch(() => {});
 
@@ -74,4 +78,5 @@ export {
   collection, doc, getDoc, getDocs, setDoc, addDoc, updateDoc, deleteDoc,
   onSnapshot, query, where, orderBy, limit, serverTimestamp, increment,
   writeBatch, collectionGroup, Timestamp, httpsCallable,
+  storageRef, uploadBytesResumable, getDownloadURL, deleteObject,
 };

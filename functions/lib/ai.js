@@ -113,6 +113,42 @@ async function generateReply({ company, products, userMessage, history = [], cha
   }
 }
 
+// ---------- مساعد كتابة البوستات ----------
+const ASSIST_TASKS = {
+  improve:   "حسّن صياغة البوست ده وخليه أوضح وأجذب للعميل، من غير ما تغيّر المعنى أو تزوّد معلومات مش موجودة.",
+  fix:       "صحّح الأخطاء الإملائية والنحوية وعلامات الترقيم بس. متغيّرش الأسلوب ولا الكلمات إلا لو غلط.",
+  emoji:     "ضيف إيموجيز مناسبة للبوست ده في الأماكن المناسبة. متغيّرش أي كلمة من النص.",
+  shorten:   "اختصر البوست ده وخليه أقصر وأقوى، مع الحفاظ على كل المعلومات المهمة.",
+  expand:    "وسّع البوست ده شوية وخليه أغنى وأجذب، من غير ما تخترع معلومات أو أسعار مش مكتوبة.",
+  marketing: "أعد صياغة البوست بأسلوب تسويقي جذاب يشجّع على الشراء، مع نداء واضح للعميل في الآخر.",
+  hashtags:  "ضيف في آخر البوست 5 إلى 8 هاشتاجات مناسبة بالعربي. سيب باقي النص زي ما هو بالظبط.",
+};
+
+/** مساعدة في كتابة/تحسين نص البوست */
+async function assistPost({ text, task, company }) {
+  const prompt = ASSIST_TASKS[task] || ASSIST_TASKS.improve;
+  const ai = client();
+
+  const res = await ai.models.generateContent({
+    model: "gemini-2.5-flash",
+    contents: text,
+    config: {
+      systemInstruction: [
+        `أنت كاتب محتوى لصفحة "${company?.name || ""}"${company?.businessType ? ` — ${company.businessType}` : ""}.`,
+        `المطلوب: ${prompt}`,
+        "",
+        "قواعد مهمة:",
+        "- اكتب بالعامية المصرية الودودة إلا لو النص الأصلي فصحى.",
+        "- ممنوع تخترع أسعار أو أرقام أو عناوين مش موجودة في النص الأصلي.",
+        "- رجّع نص البوست النهائي **بس**، من غير أي مقدمة أو شرح أو علامات تنسيق.",
+      ].join("\n"),
+      temperature: 0.7,
+    },
+  });
+
+  return String(res.text || "").trim();
+}
+
 /** اختبار سريع للتأكد إن الاتصال بـ Gemini شغال */
 async function ping() {
   const ai = client();
@@ -123,4 +159,4 @@ async function ping() {
   return String(r.text || "").trim();
 }
 
-module.exports = { buildSystemPrompt, generateReply, ping, TONE_TEXT, client };
+module.exports = { buildSystemPrompt, generateReply, assistPost, ping, TONE_TEXT, ASSIST_TASKS, client };

@@ -51,6 +51,8 @@ const $ = (id) => document.getElementById(id);
     dot.className = `status-dot ${st.cls}`;
     netText.textContent = st.text;
     netText.className = `net-text ${st.cls}-text`;
+    // في الموبايل النص مخفي، فالنقطة نفسها بتحمل الحالة
+    dot.parentElement.title = st.text;
   });
 
   // ---------- قائمة المستخدم ----------

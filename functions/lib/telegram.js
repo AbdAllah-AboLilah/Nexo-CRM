@@ -20,6 +20,9 @@ exports.sendMessage = (token, chatId, text) =>
 exports.sendPhoto = (token, chatId, photoUrl, caption) =>
   call(token, "sendPhoto", { chat_id: chatId, photo: photoUrl, caption, parse_mode: "HTML" });
 
+exports.sendVideo = (token, chatId, videoUrl, caption) =>
+  call(token, "sendVideo", { chat_id: chatId, video: videoUrl, caption, parse_mode: "HTML" });
+
 exports.setWebhook = (token, url, secretToken) =>
   call(token, "setWebhook", {
     url,

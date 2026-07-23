@@ -10,7 +10,7 @@ const { setGlobalOptions, logger } = require("firebase-functions/v2");
 const admin = require("firebase-admin");
 
 const { encrypt, decrypt, verifyMetaSignature } = require("./lib/crypto");
-const { generateReply, ping } = require("./lib/ai");
+const { generateReply, assistPost, ping, ASSIST_TASKS } = require("./lib/ai");
 const telegram = require("./lib/telegram");
 
 admin.initializeApp();
@@ -438,7 +438,27 @@ exports.runScheduledPosts = onSchedule(
               const token = decrypt(s.data().token, TOKEN_ENC_KEY.value());
               const chatId = s.data().chatId;
               if (!chatId) throw new Error("مفيش معرّف قناة");
-              await telegram.sendMessage(token, chatId, text);
+
+              const media = Array.isArray(post.media) ? post.media : [];
+              const photos = media.filter((m) => m.type === "image" && m.url);
+              const videos = media.filter((m) => m.type === "video" && m.url);
+
+              if (photos.length || videos.length) {
+                // تليجرام بيحط الكابشن على أول ملف بس (الحد 1024 حرف)
+                const caption = text.length > 1024 ? text.slice(0, 1021) + "..." : text;
+                const first = photos[0] || videos[0];
+                if (first.type === "image") await telegram.sendPhoto(token, chatId, first.url, caption);
+                else await telegram.sendVideo(token, chatId, first.url, caption);
+
+                for (const m of media.filter((x) => x !== first && x.url)) {
+                  if (m.type === "image") await telegram.sendPhoto(token, chatId, m.url, "");
+                  else await telegram.sendVideo(token, chatId, m.url, "");
+                }
+                // لو النص أطول من حد الكابشن، نبعت الباقي كرسالة
+                if (text.length > 1024) await telegram.sendMessage(token, chatId, text);
+              } else {
+                await telegram.sendMessage(token, chatId, text);
+              }
               results[platform] = "sent";
             } else {
               results[platform] = "skipped"; // لسه مش مربوط
@@ -513,5 +533,40 @@ exports.aiHealthCheck = onCall(async (req) => {
     return { ok: true, reply };
   } catch (e) {
     return { ok: false, error: String(e.message).slice(0, 300) };
+  }
+});
+
+// ============================================================
+//  مساعد كتابة البوستات بالذكاء الاصطناعي
+// ============================================================
+exports.aiAssistPost = onCall(async (req) => {
+  const profile = await requireProfile(req.auth);
+  const { text, task, companyId } = req.data || {};
+
+  if (level(profile.role) < level("manager"))
+    throw new HttpsError("permission-denied", "مش مسموح لك.");
+  assertCompanyAccess(profile, companyId);
+
+  if (!text || !String(text).trim())
+    throw new HttpsError("invalid-argument", "اكتب نص البوست الأول.");
+  if (String(text).length > 5000)
+    throw new HttpsError("invalid-argument", "النص طويل جداً.");
+  if (!ASSIST_TASKS[task])
+    throw new HttpsError("invalid-argument", "نوع المساعدة غير معروف.");
+
+  const companySnap = await db.doc(`companies/${companyId}`).get();
+  if (!companySnap.exists) throw new HttpsError("not-found", "الشركة مش موجودة.");
+  const company = companySnap.data();
+
+  if (company.features?.canUseAI === false)
+    throw new HttpsError("permission-denied", "ميزة الذكاء الاصطناعي مقفولة للشركة دي.");
+
+  try {
+    const result = await assistPost({ text: String(text), task, company });
+    if (!result) throw new Error("رد فاضي");
+    return { ok: true, text: result };
+  } catch (e) {
+    logger.error("aiAssistPost failed", e);
+    throw new HttpsError("internal", "تعذّر توليد النص: " + String(e.message).slice(0, 200));
   }
 });
