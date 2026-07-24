@@ -550,8 +550,9 @@ table.data tbody tr:hover { background: #fafbfe; }
 
 /* ---------- الموبايل ---------- */
 @media (max-width: 900px) {
-  .sidebar { position: fixed; inset-block: 0; inset-inline-end: calc(-1 * var(--sidebar-w)); }
-  .sidebar.open { inset-inline-end: 0; }
+  /* القائمة بتفتح من اليمين (جهة البداية في العربي) */
+  .sidebar { position: fixed; inset-block: 0; inset-inline-start: calc(-1 * var(--sidebar-w)); }
+  .sidebar.open { inset-inline-start: 0; }
   .menu-toggle { display: inline-flex; align-items: center; justify-content: center; }
   .user-info { display: none; }
   .caret { display: none; }
@@ -574,8 +575,59 @@ table.data tbody tr:hover { background: #fafbfe; }
   .notif-panel { position: fixed; inset-inline: 12px; top: 62px; width: auto; max-height: 70vh; }
   .notif-del { opacity: 1; }
 }
-@media (max-width: 480px) {
-  .page-head { align-items: flex-start; flex-direction: column; }
+/* ---------- شاشات صغيرة: تكثيف المسافات والخطوط ---------- */
+@media (max-width: 600px) {
+  .content-area { padding: 12px; }
+
+  .page-head { align-items: flex-start; flex-direction: column; gap: 10px; margin-bottom: 14px; }
+  .page-head h2 { font-size: 17px; }
+  .page-head .sub { font-size: 12px; }
   .head-actions { width: 100%; }
-  .head-actions .btn { flex: 1; }
+  .head-actions .btn { flex: 1; padding: 9px 12px; font-size: 13px; }
+
+  .card { padding: 16px; border-radius: 12px; }
+  .card + .card { margin-top: 12px; }
+  .card-title { font-size: 14.5px; margin-bottom: 12px; }
+  .text-muted { font-size: 13px; }
+
+  .grid { gap: 10px; }
+  .grid-2, .grid-3, .grid-4 { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
+
+  /* كروت الإحصائيات: اتنين في الصف بدل واحد ضخم */
+  .stat-card { padding: 14px; }
+  .stat-card .stat-icon { width: 32px; height: 32px; font-size: 14px; inset-inline-end: 12px; top: 12px; }
+  .stat-label { font-size: 11.5px; }
+  .stat-number { font-size: 22px; margin: 6px 0 2px; }
+  .stat-sub { font-size: 10.5px; }
+
+  .btn { padding: 9px 14px; font-size: 13.5px; }
+  .form-control { padding: 10px 12px; font-size: 14px; }
+  .field { margin-bottom: 12px; }
+  .field label { font-size: 12.5px; }
+
+  .switch-row, .check-row, .tenant-item { padding: 10px 12px; }
+  .switch-label strong { font-size: 12.5px; }
+  .switch-label small { font-size: 11px; }
+
+  table.data { font-size: 12.5px; min-width: 480px; }
+  table.data th, table.data td { padding: 9px 10px; }
+
+  .tabs button { padding: 9px 12px; font-size: 13px; }
+  .empty { padding: 34px 16px; }
+  .empty i { font-size: 36px; }
+  .empty h3 { font-size: 14.5px; }
+  .empty p { font-size: 12.5px; }
+
+  /* النافذة المنبثقة تاخد الشاشة كلها تقريباً */
+  .modal-overlay { padding: 10px; align-items: flex-end; }
+  .modal { max-height: 94vh; border-radius: 16px 16px 0 0; }
+  .modal-head { padding: 14px 16px; }
+  .modal-head h3 { font-size: 15px; }
+  .modal-body { padding: 16px; }
+  .modal-foot { padding: 12px 16px; }
+  .modal-foot .btn { flex: 1; }
+
+  .chat-history { padding: 14px; }
+  .message { max-width: 92%; font-size: 13px; padding: 9px 12px; }
+  .inbox-list { max-height: 220px; }
 }

@@ -134,7 +134,11 @@ function availableRoles() {
 
 function userForm(existing = null) {
   const name = field({ label: "الاسم *", name: "name", value: existing?.name || "" });
-  const email = field({ label: "البريد الإلكتروني *", name: "email", type: "email", value: existing?.email || "" });
+  const email = field({
+    label: "البريد الإلكتروني *", name: "email", type: "email", value: existing?.email || "",
+    placeholder: "name@company.com",
+    hint: existing ? "" : "لازم بريد كامل — مش اسم لوحده. ومش شرط يكون بريد حقيقي، بس لازم يكون بالشكل ده.",
+  });
   if (existing) email.input.disabled = true;
   const pass = field({ label: existing ? "كلمة مرور جديدة (سيبها فاضية لو مش هتغيرها)" : "كلمة المرور *",
     name: "password", type: "password", hint: "6 حروف على الأقل" });
@@ -163,7 +167,10 @@ function userForm(existing = null) {
             companyId: session.companyId,
             uid: existing?.id || null,
           };
-          if (!payload.name || !payload.email) return toast("الاسم والبريد مطلوبين", "error");
+          if (!payload.name) return toast("اكتب اسم المستخدم", "error");
+          if (!payload.email) return toast("اكتب البريد الإلكتروني", "error");
+          if (!isEmail(payload.email))
+            return toast("البريد الإلكتروني مش مكتوب صح — لازم يكون بالشكل ده: name@company.com", "error");
           if (!existing && payload.password.length < 6) return toast("كلمة المرور لازم 6 حروف على الأقل", "error");
 
           button.disabled = true;
@@ -196,12 +203,21 @@ async function toggleActive(u) {
   } catch (e) { toast("فشل التحديث: " + e.message, "error"); }
 }
 
+function isEmail(v) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(String(v).trim());
+}
+
 function errText(e) {
   const msg = e?.message || "";
-  if (msg.includes("already-exists") || msg.includes("email-already")) return "البريد ده مستخدم قبل كده.";
-  if (msg.includes("quota") || msg.includes("LIMIT")) return "وصلت للحد الأقصى للمستخدمين في الباقة.";
-  if (msg.includes("internal") || msg.includes("not-found"))
-    return "الدالة السحابية مش مرفوعة لسه. ارفع الـ functions الأول (firebase deploy --only functions).";
+  if (/improperly formatted|invalid-email/i.test(msg))
+    return "البريد الإلكتروني مش مكتوب صح — لازم يكون بالشكل ده: name@company.com";
+  if (/already-exists|email-already/i.test(msg)) return "البريد ده مستخدم قبل كده.";
+  if (/weak-password/i.test(msg)) return "كلمة المرور ضعيفة — خليها 6 حروف على الأقل.";
+  if (/quota|LIMIT|resource-exhausted/i.test(msg)) return "وصلت للحد الأقصى للمستخدمين في الباقة.";
+  if (/permission-denied/i.test(msg)) return "مش مسموح لك بالإجراء ده.";
+  if (/unauthenticated/i.test(msg)) return "الجلسة انتهت — اعمل تسجيل دخول تاني.";
+  if (/not-found|internal/i.test(msg))
+    return "تعذّر الاتصال بالسيرفر. جرّب تاني، ولو المشكلة فضلت كلّم إدارة النظام.";
   return "فشل: " + msg;
 }
 
