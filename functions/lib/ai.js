@@ -64,7 +64,7 @@ function client() {
  * توليد رد + تصنيف
  * بيرجّع: { reply, intent, needsHuman, isComplaint, isAbusive }
  */
-async function generateReply({ company, products, userMessage, history = [], channel = "message" }) {
+async function generateReply({ company, products, userMessage, history = [], channel = "message", postContext = null }) {
   const ai = client();
 
   const context = history.slice(-6)
@@ -77,6 +77,7 @@ async function generateReply({ company, products, userMessage, history = [], cha
     channel === "comment"
       ? "المصدر: تعليق عام على بوست. لو السؤال عن السعر، الرد العام لازم يكون قصير جداً ويقول إن السعر اتبعت في الخاص."
       : "المصدر: رسالة خاصة.",
+    postContext ? `\n⚠️ ${postContext}\nلو العميل سأل عن السعر أو التفاصيل، رُد بسعر المنتج ده تحديداً.` : "",
     "",
     "مطلوب منك ترجع JSON فقط بالشكل ده بدون أي كلام قبله أو بعده:",
     `{"reply":"نص الرد","intent":"price|hours|address|jobs|order|complaint|greeting|other","needsHuman":true|false,"isComplaint":true|false,"isAbusive":true|false}`,

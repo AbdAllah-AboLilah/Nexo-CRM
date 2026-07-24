@@ -296,13 +296,26 @@ exports.telegramWebhook = onRequest(
       const companySnap = await db.doc(`companies/${companyId}`).get();
       if (!companySnap.exists) return;
 
+      // الدخول من لينك بوست: /start post_<id> — العميل جاي من بوست معيّن
+      let contextPostId = null;
+      let text = msg.text;
+      const startMatch = /^\/start\s+post_(\S+)/.exec(msg.text.trim());
+      if (startMatch) {
+        contextPostId = startMatch[1];
+        // نستبدل أمر /start برسالة طبيعية عشان الـ AI يرحّب ويربطها بالبوست
+        text = "السلام عليكم، ممكن تفاصيل عن العرض ده؟";
+      } else if (msg.text.trim() === "/start") {
+        text = "السلام عليكم";
+      }
+
       await handleIncoming({
         company: { id: companyId, ...companySnap.data() },
         platform: "telegram",
         externalId: String(msg.chat.id),
         customerName: [msg.from?.first_name, msg.from?.last_name].filter(Boolean).join(" ") || "عميل",
-        text: msg.text,
+        text,
         channel: "message",
+        contextPostId,
       });
     } catch (err) {
       logger.error("telegramWebhook error", err);
@@ -312,12 +325,15 @@ exports.telegramWebhook = onRequest(
 // ============================================================
 //  المعالجة الموحّدة لأي رسالة واردة من أي منصة
 // ============================================================
-async function handleIncoming({ company, platform, externalId, customerName, text, channel, postId, commentId }) {
+async function handleIncoming({ company, platform, externalId, customerName, text, channel, postId, commentId, contextPostId }) {
   const companyId = company.id;
   const convId = `${platform}_${externalId}`;
   const convRef = db.doc(`companies/${companyId}/conversations/${convId}`);
   const convSnap = await convRef.get();
   const conv = convSnap.exists ? convSnap.data() : null;
+
+  // البوست اللي العميل جاي منه (من deep-link أو من تعليق)، أو آخر بوست اتربط بالمحادثة
+  const activePostId = contextPostId || postId || conv?.contextPostId || null;
 
   // تسجيل رسالة العميل
   await convRef.set({
@@ -328,6 +344,7 @@ async function handleIncoming({ company, platform, externalId, customerName, tex
     status: conv?.status === "in_progress" ? "in_progress" : (conv?.status || "new"),
     awaitingSince: conv?.awaitingSince || admin.firestore.FieldValue.serverTimestamp(),
     aiEnabled: conv?.aiEnabled !== false,
+    contextPostId: activePostId,
     createdAt: conv?.createdAt || admin.firestore.FieldValue.serverTimestamp(),
   }, { merge: true });
 
@@ -352,10 +369,26 @@ async function handleIncoming({ company, platform, externalId, customerName, tex
   const products = productsSnap.docs.map((d) => d.data());
   const history = historySnap.docs.map((d) => d.data()).reverse();
 
+  // سياق البوست: لو العميل جاي من بوست معيّن، نجيب منتجه وسعره
+  let postContext = null;
+  if (activePostId) {
+    try {
+      const postSnap = await db.doc(`companies/${companyId}/posts/${activePostId}`).get();
+      if (postSnap.exists) {
+        const pd = postSnap.data();
+        if (pd.price || pd.productName) {
+          postContext = `العميل ده بيسأل عن بوست معيّن: "${(pd.caption || "").slice(0, 100)}"`
+            + (pd.productName ? ` — المنتج: ${pd.productName}` : "")
+            + (pd.price ? ` — سعره: ${pd.price} جنيه.` : ".");
+        }
+      }
+    } catch (e) { logger.warn("post context failed", e.message); }
+  }
+
   let result;
   try {
     result = await generateReply({
-      company, products, userMessage: text, history, channel,
+      company, products, userMessage: text, history, channel, postContext,
     });
   } catch (e) {
     logger.error("AI failed", e);
@@ -456,7 +489,7 @@ async function publishOnePost(companyId, postRef, post) {
 
   for (const platform of post.platforms || []) {
     try {
-      const text = post.versions?.[platform] || post.caption;
+      let text = post.versions?.[platform] || post.caption;
 
       if (platform === "telegram") {
         const s = await db.doc(`companies/${companyId}/secrets/telegram`).get();
@@ -464,6 +497,13 @@ async function publishOnePost(companyId, postRef, post) {
         const token = decrypt(s.data().token, TOKEN_ENC_KEY.value());
         const chatId = s.data().chatId;
         if (!chatId) throw new Error("مفيش معرّف قناة");
+
+        // زرار "اسأل عن العرض ده" — بيودّي البوت ومعاه معرّف البوست
+        // فلما العميل يكلّم البوت، بيعرف إنه بيسأل عن البوست ده تحديداً
+        const botUser = s.data().botUsername;
+        if (botUser) {
+          text += `\n\n💬 عايز تفاصيل أو تطلب؟ اضغط هنا:\nhttps://t.me/${botUser}?start=post_${postRef.id}`;
+        }
 
         const media = Array.isArray(post.media) ? post.media : [];
         const photos = media.filter((m) => m.type === "image" && m.url);
