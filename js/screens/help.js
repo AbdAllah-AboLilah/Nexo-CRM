@@ -8,12 +8,17 @@ import {
 } from "../firebase.js";
 import { session } from "../auth.js";
 import { el, card, esc, toast, field, modal, spinner, emptyState, fmtTimeAgo, fmtDateTime } from "../ui.js";
-import { attachTextDraft } from "../drafts.js";
+import { attachTextDraft, saveDraft, loadDraft } from "../drafts.js";
+import { routeParams } from "../router.js";
 
 let unsubSupport = null;
 let supportDraft = null;
 let activeTab = "assistant";
-let chatHistory = [];   // محادثة المساعد الذكي (في الذاكرة بس)
+let chatHistory = [];   // محادثة المساعد الذكي (محفوظة محلياً)
+
+function historyKey() { return `assistant.${session.companyId}`; }
+function persistHistory() { saveDraft(historyKey(), { items: chatHistory.slice(-40) }); }
+function restoreHistory() { chatHistory = loadDraft(historyKey())?.data?.items || []; }
 
 const SUGG_STATUS = {
   new:       { label: "جديد", cls: "badge-red" },
@@ -29,6 +34,10 @@ export async function render(root) {
       el("div", { class: "sub", text: "اسأل المساعد الذكي، أو كلّم الدعم مباشرة، أو اقترح ميزة جديدة" }),
     ]),
   ]));
+
+  const wanted = routeParams().tab;
+  if (["assistant", "support", "suggestions"].includes(wanted)) activeTab = wanted;
+  restoreHistory();
 
   const tabs = el("div", { class: "tabs" });
   const pane = el("div");
@@ -157,6 +166,7 @@ function assistantTab(pane) {
     input.style.height = "auto";
 
     chatHistory.push({ from: "user", text: q });
+    persistHistory();
     drawHistory();
 
     const thinking = el("div", { class: "message msg-customer" }, [
@@ -186,6 +196,7 @@ function assistantTab(pane) {
 
     thinking.remove();
     sendBtn.disabled = false;
+    persistHistory();
     drawHistory();
   }
 }
@@ -364,5 +375,4 @@ export function destroy() {
   unsubSupport?.();
   unsubSupport = null;
   activeTab = "assistant";
-  chatHistory = [];
 }

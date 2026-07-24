@@ -80,12 +80,12 @@ export async function render(root) {
   const personaBox = card("شخصية البوت وتعليماته");
   const businessType = field({
     label: "نشاط الشركة", name: "businessType", value: ai.businessType || c.businessType || "",
-    placeholder: "مثال: محل طرح ومستلزمات حريمي في المحلة الكبرى",
+    placeholder: "مثال: منصة ذكية لإدارة صفحات التواصل والرد الآلي على العملاء",
     hint: "كل ما توصفه أدق، كل ما الردود تطلع أحسن",
   });
   const extra = field({
     label: "تعليمات إضافية للبوت", name: "extra", type: "textarea", rows: 5, value: ai.extraInstructions || "",
-    placeholder: "مثال:\n- لو حد سأل عن حاجة ملهاش علاقة بالمنتجات، جاوبه بخفة دم وفكّره إننا محل طرح.\n- متأكدش أي سعر مش موجود في قائمة الأصناف.\n- لو العميل زعلان، اعتذر واعرض تحويله لخدمة العملاء.",
+    placeholder: "مثال:\n- لو حد سأل عن حاجة ملهاش علاقة بخدماتنا، جاوبه بخفة دم وفكّره بنشاطنا.\n- متأكدش أي سعر مش موجود في قائمة الأصناف.\n- لو العميل زعلان، اعتذر واعرض تحويله لخدمة العملاء.",
   });
   personaBox.append(businessType.wrap, extra.wrap);
   root.append(personaBox);

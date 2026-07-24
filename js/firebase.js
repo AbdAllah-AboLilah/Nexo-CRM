@@ -11,7 +11,7 @@ import {
   initializeFirestore, persistentLocalCache, persistentMultipleTabManager,
   collection, doc, getDoc, getDocs, setDoc, addDoc, updateDoc, deleteDoc,
   onSnapshot, query, where, orderBy, limit, serverTimestamp, increment,
-  writeBatch, collectionGroup, onSnapshotsInSync, Timestamp,
+  writeBatch, collectionGroup, onSnapshotsInSync, Timestamp, waitForPendingWrites,
 } from "https://www.gstatic.com/firebasejs/12.16.0/firebase-firestore.js";
 import { getFunctions, httpsCallable } from "https://www.gstatic.com/firebasejs/12.16.0/firebase-functions.js";
 import {
@@ -35,7 +35,12 @@ setPersistence(auth, browserLocalPersistence).catch(() => {});
 
 // ---------- مراقبة حالة المزامنة ----------
 // 🔴 مفيش نت | 🟡 فيه بيانات لسه بترفع | 🟢 كل حاجة متزامنة
-const pendingSources = new Set();
+//
+// ملحوظة: بنعتمد على waitForPendingWrites بتاعة Firestore نفسها بدل ما
+// نعدّ الكتابات بإيدينا — لأن العدّ اليدوي بيعلق لو الشاشة اتقفلت
+// وفيها كتابة معلّقة، والنقطة تفضل صفرا للأبد.
+let syncing = false;
+let syncWatcher = null;
 let netListeners = [];
 
 export function onNetworkState(cb) {
@@ -46,7 +51,7 @@ export function onNetworkState(cb) {
 
 export function currentNetworkState() {
   if (!navigator.onLine) return "offline";
-  if (pendingSources.size > 0) return "syncing";
+  if (syncing) return "syncing";
   return "online";
 }
 
@@ -55,21 +60,36 @@ function emitNetwork() {
   netListeners.forEach((f) => f(s));
 }
 
+/** بيبدأ مراقبة الكتابات المعلّقة لحد ما السيرفر يأكّدها كلها */
+function watchPendingWrites() {
+  if (syncWatcher || !navigator.onLine) return;
+  syncing = true;
+  emitNetwork();
+
+  // حد أقصى 20 ثانية عشان المؤشر ما يعلقش لو الشبكة بايظة
+  const guard = setTimeout(finish, 20000);
+  syncWatcher = waitForPendingWrites(db).then(finish, finish);
+
+  function finish() {
+    clearTimeout(guard);
+    syncWatcher = null;
+    syncing = false;
+    emitNetwork();
+  }
+}
+
 /** كل شاشة بتنادي دي مع أي snapshot عشان نعرف فيه كتابة معلقة ولا لأ */
-export function trackSnapshot(key, snap) {
-  if (snap?.metadata?.hasPendingWrites) pendingSources.add(key);
-  else pendingSources.delete(key);
-  emitNetwork();
+export function trackSnapshot(_key, snap) {
+  if (snap?.metadata?.hasPendingWrites) watchPendingWrites();
 }
 
-export function markPending(key, isPending) {
-  if (isPending) pendingSources.add(key);
-  else pendingSources.delete(key);
-  emitNetwork();
+/** تُنادى يدوياً بعد أي كتابة مباشرة (مش جاية من snapshot) */
+export function markPending() {
+  watchPendingWrites();
 }
 
-window.addEventListener("online", emitNetwork);
-window.addEventListener("offline", emitNetwork);
+window.addEventListener("online", () => { emitNetwork(); watchPendingWrites(); });
+window.addEventListener("offline", () => { syncing = false; emitNetwork(); });
 onSnapshotsInSync(db, emitNetwork);
 
 export {

@@ -56,7 +56,7 @@ function constantsCard() {
   const box = card("البيانات الثابتة للشركة");
   const editable = atLeast("owner");
 
-  const address = field({ label: "العنوان", name: "address", type: "textarea", rows: 2, value: k.address, placeholder: "المحلة الكبرى - شارع ..." });
+  const address = field({ label: "العنوان", name: "address", type: "textarea", rows: 2, value: k.address, placeholder: "أونلاين — بنخدم كل المحافظات" });
   const hours = field({ label: "مواعيد العمل", name: "workingHours", type: "textarea", rows: 2, value: k.workingHours, placeholder: "يومياً من 10 صباحاً لـ 10 مساءً — الجمعة إجازة" });
   const phones = field({ label: "أرقام التواصل", name: "phones", value: k.phones, placeholder: "01xxxxxxxxx / 01xxxxxxxxx" });
   const policy = field({ label: "سياسة الاستبدال والاسترجاع", name: "exchangePolicy", type: "textarea", rows: 3, value: k.exchangePolicy, placeholder: "الاستبدال خلال 14 يوم بشرط ..." });
@@ -90,9 +90,9 @@ function linksCard() {
     text: "اكتب البيانات هنا مرة واحدة، والنظام هيولّد الروابط الجاهزة ويحطها في البوستات — مع الاستبعاد الذكي (مش هيحط لينك تليجرام في بوست نازل على تليجرام)." }));
 
   const wa = field({ label: "رقم واتساب (بكود الدولة بدون +)", name: "whatsappNumber", value: k.whatsappNumber, placeholder: "201234567890" });
-  const ig = field({ label: "يوزر انستجرام (بدون @)", name: "instagramUser", value: k.instagramUser, placeholder: "InstaStore" });
-  const tg = field({ label: "قناة/يوزر تليجرام (بدون @)", name: "telegramChannel", value: k.telegramChannel, placeholder: "InstaStore" });
-  const fb = field({ label: "رابط صفحة فيسبوك", name: "facebookPage", value: k.facebookPage, placeholder: "https://facebook.com/InstaStore" });
+  const ig = field({ label: "يوزر انستجرام (بدون @)", name: "instagramUser", value: k.instagramUser, placeholder: "NexoApp" });
+  const tg = field({ label: "قناة/يوزر تليجرام (بدون @)", name: "telegramChannel", value: k.telegramChannel, placeholder: "NexoApp" });
+  const fb = field({ label: "رابط صفحة فيسبوك", name: "facebookPage", value: k.facebookPage, placeholder: "https://facebook.com/NexoApp" });
 
   box.append(el("div", { class: "form-row" }, [wa.wrap, ig.wrap]), el("div", { class: "form-row" }, [tg.wrap, fb.wrap]));
 
@@ -193,7 +193,7 @@ function integrationsCard() {
 
 function telegramForm() {
   const token = field({ label: "Bot Token", name: "token", placeholder: "123456789:AAF...", hint: "التوكن بيتخزن مشفّر على السيرفر، ومش بيظهر تاني في اللوحة." });
-  const channel = field({ label: "معرّف القناة/الجروب", name: "chatId", value: session.company?.constants?.telegramChannel || "", placeholder: "@InstaStore أو -1001234567890" });
+  const channel = field({ label: "معرّف القناة/الجروب", name: "chatId", value: session.company?.constants?.telegramChannel || "", placeholder: "@NexoApp أو -1001234567890" });
   const body = el("div", {}, [token.wrap, channel.wrap]);
 
   modal({

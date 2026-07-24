@@ -37,6 +37,12 @@ function routeFromHash() {
   return id || "dashboard";
 }
 
+/** قراءة الباراميترات من الهاش — مثال: #/help?tab=support */
+export function routeParams() {
+  const q = (location.hash || "").split("?")[1] || "";
+  return Object.fromEntries(new URLSearchParams(q));
+}
+
 export function buildNav() {
   if (!sidebarList) return;
   sidebarList.innerHTML = "";
@@ -61,7 +67,7 @@ export async function go(id, updateHash = true) {
   }
   const target = item && canSee(item) ? item : NAV[0];
 
-  if (updateHash && location.hash !== `#/${target.id}`) {
+  if (updateHash && !location.hash.startsWith(`#/${target.id}`)) {
     location.hash = `#/${target.id}`;
     return; // hashchange هيرجع ينادي go
   }

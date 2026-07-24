@@ -9,8 +9,8 @@ const LEVEL = { superadmin: 100, owner: 80, manager: 60, agent: 40 };
 /** أنواع الإشعارات — العنوان والأيقونة واللون والشاشة اللي بتفتح */
 const TYPES = {
   // ليك أنت (منشئ النظام)
-  suggestion_new:    { icon: "fa-lightbulb",       color: "warning", link: "#/support" },
-  support_message:   { icon: "fa-headset",         color: "primary", link: "#/support" },
+  suggestion_new:    { icon: "fa-lightbulb",       color: "warning", link: "#/support?tab=suggestions" },
+  support_message:   { icon: "fa-headset",         color: "primary", link: "#/support?tab=threads" },
   integration_change:{ icon: "fa-plug",            color: "primary", link: "#/companies" },
   quota_warning:     { icon: "fa-gauge-high",      color: "warning", link: "#/companies" },
   system_error:      { icon: "fa-triangle-exclamation", color: "danger", link: "#/companies" },
@@ -20,7 +20,7 @@ const TYPES = {
   complaint_new:     { icon: "fa-face-frown",      color: "danger",  link: "#/inbox" },
   reply_overdue:     { icon: "fa-clock",           color: "warning", link: "#/inbox" },
   report_ready:      { icon: "fa-file-lines",      color: "primary", link: "#/analytics" },
-  support_reply:     { icon: "fa-comment-dots",    color: "primary", link: "#/help" },
+  support_reply:     { icon: "fa-comment-dots",    color: "primary", link: "#/help?tab=support" },
   feature_unlocked:  { icon: "fa-unlock",          color: "success", link: "#/settings" },
 
   // لمدير السوشيال ميديا

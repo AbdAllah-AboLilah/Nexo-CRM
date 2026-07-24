@@ -98,8 +98,8 @@ async function load(body) {
 // ---------- إضافة / تعديل شركة ----------
 function companyForm(existing = null) {
   const form = el("div");
-  const name = field({ label: "اسم الشركة *", name: "name", value: existing?.name || "", placeholder: "مثال: Insta - فرع المحلة" });
-  const type = field({ label: "نشاط الشركة", name: "businessType", value: existing?.businessType || "", placeholder: "مثال: محل طرح ومستلزمات حريمي" });
+  const name = field({ label: "اسم الشركة *", name: "name", value: existing?.name || "", placeholder: "مثال: Nexo - الفرع الرئيسي" });
+  const type = field({ label: "نشاط الشركة", name: "businessType", value: existing?.businessType || "", placeholder: "مثال: منصة ذكية لإدارة صفحات التواصل" });
   const plan = field({
     label: "الباقة", name: "plan", type: "select", value: existing?.plan || "Basic",
     options: [{ value: "Basic", label: "أساسية" }, { value: "Pro", label: "متقدمة" }, { value: "VIP", label: "VIP" }],

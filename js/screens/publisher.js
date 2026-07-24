@@ -129,7 +129,7 @@ export async function render(root) {
   }
 
   const prodRow = el("div", { class: "form-row", style: "margin-top:14px" });
-  const productName = field({ label: "المنتج المرتبط (اختياري)", name: "product", placeholder: "طرحة كريب مضلع" });
+  const productName = field({ label: "المنتج المرتبط (اختياري)", name: "product", placeholder: "باقة Nexo المتقدمة" });
   const price = field({ label: "السعر", name: "price", type: "number", placeholder: "150" });
   productName.input.addEventListener("input", () => { state.productName = productName.input.value; refresh(); });
   price.input.addEventListener("input", () => { state.price = price.input.value; refresh(); });

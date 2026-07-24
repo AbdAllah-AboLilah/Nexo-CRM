@@ -8,6 +8,7 @@ import {
 } from "../firebase.js";
 import { session, isSuper } from "../auth.js";
 import { el, card, esc, toast, field, modal, spinner, emptyState, fmtTimeAgo, fmtDateTime } from "../ui.js";
+import { routeParams } from "../router.js";
 
 let unsubThreads = null, unsubMsgs = null;
 let activeTab = "suggestions";
@@ -33,6 +34,9 @@ export async function render(root) {
       el("div", { class: "sub", text: "كل طلبات ورسائل الشركات في مكان واحد" }),
     ]),
   ]));
+
+  const wanted = routeParams().tab;
+  if (["suggestions", "threads"].includes(wanted)) activeTab = wanted;
 
   const tabs = el("div", { class: "tabs" });
   const pane = el("div");
