@@ -9,10 +9,12 @@ import { session, tenantPath } from "../auth.js";
 import { PLATFORMS } from "../config.js";
 import { el, esc, toast, fmtTimeAgo, fmtDateTime, emptyState, modal, field } from "../ui.js";
 import { buildLinks } from "./settings.js";
+import { attachTextDraft } from "../drafts.js";
 
 let unsubList = null, unsubMsgs = null;
 let conversations = [], activeId = null, filterKey = "all";
 let listNode, historyNode, headNode, inputNode, sendBtn, quickNode;
+let replyDraft = null;
 
 const STATUS = {
   new:         { label: "جديدة",      cls: "badge-red" },
@@ -147,6 +149,11 @@ function openChat(id) {
   drawHead(conv);
   drawQuickActions();
 
+  replyDraft?.destroy();
+  inputNode.value = "";
+  replyDraft = attachTextDraft(`inbox.${session.companyId}.${id}`, inputNode);
+  inputNode.dispatchEvent(new Event("input"));
+
   historyNode.innerHTML = "";
   const q = query(collection(db, ...tenantPath("conversations", id, "messages")), orderBy("createdAt"), limit(200));
   unsubMsgs = onSnapshot(q, (snap) => {
@@ -264,6 +271,7 @@ async function sendReply() {
     });
     inputNode.value = "";
     inputNode.style.height = "auto";
+    replyDraft?.clear();
   } catch (e) {
     toast("فشل الإرسال: " + e.message, "error");
   }
@@ -304,6 +312,7 @@ function showEmptyChat() {
 }
 
 export function destroy() {
+  replyDraft?.destroy(); replyDraft = null;
   unsubList?.(); unsubMsgs?.();
   unsubList = unsubMsgs = null;
   conversations = []; activeId = null; filterKey = "all";

@@ -12,6 +12,25 @@ export const APP_TAGLINE = "نظام متكامل لإدارة الصفحات و
 // الإيميل ده بيتعامل كـ Super Admin دائماً (نفس القيمة موجودة في firestore.rules)
 export const SUPER_ADMIN_EMAIL = "admin@nexo.com";
 
+// ---------- أسماء المستخدمين ----------
+// فايربيز بيطلب صيغة بريد إلكتروني، فالمستخدم يكتب اسم عادي
+// والنظام بيكمّل الجزء الناقص لوحده. ده اسم داخلي مش بريد حقيقي.
+export const USER_DOMAIN = "nexo.local";
+
+/** بيحوّل "ahmed" لـ "ahmed@nexo.local"، ولو كتب بريد كامل بيسيبه زي ما هو */
+export function normalizeLogin(value) {
+  const v = String(value || "").trim().toLowerCase();
+  if (!v) return "";
+  if (v.includes("@")) return v;
+  return `${v.replace(/\s+/g, ".")}@${USER_DOMAIN}`;
+}
+
+/** بيشيل الدومين الداخلي عند العرض عشان المستخدم يشوف اسمه بس */
+export function displayLogin(email) {
+  const v = String(email || "");
+  return v.endsWith(`@${USER_DOMAIN}`) ? v.slice(0, -(USER_DOMAIN.length + 1)) : v;
+}
+
 export const firebaseConfig = {
   apiKey: "AIzaSyBc3cKrm0ML_Nr7aFWD79Za7_AD1hiaWLk",
   authDomain: "nexo-crm-28376.firebaseapp.com",

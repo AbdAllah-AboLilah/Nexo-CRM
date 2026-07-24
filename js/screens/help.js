@@ -8,8 +8,10 @@ import {
 } from "../firebase.js";
 import { session } from "../auth.js";
 import { el, card, esc, toast, field, modal, spinner, emptyState, fmtTimeAgo, fmtDateTime } from "../ui.js";
+import { attachTextDraft } from "../drafts.js";
 
 let unsubSupport = null;
+let supportDraft = null;
 let activeTab = "assistant";
 let chatHistory = [];   // محادثة المساعد الذكي (في الذاكرة بس)
 
@@ -208,6 +210,9 @@ function supportTab(pane, prefill = "") {
   });
   sendBtn.addEventListener("click", send);
 
+  supportDraft?.destroy();
+  supportDraft = attachTextDraft(`support.${session.companyId}`, input);
+
   box.append(historyNode, el("div", { class: "chat-input-area" }, [
     el("div", { class: "chat-input-row" }, [input, sendBtn]),
   ]));
@@ -254,6 +259,7 @@ function supportTab(pane, prefill = "") {
       await httpsCallable(fns, "sendSupportMessage")({ text, companyId: session.companyId });
       input.value = "";
       input.style.height = "auto";
+      supportDraft?.clear();
     } catch (e) {
       toast("فشل الإرسال: " + (e.message || ""), "error");
     }
@@ -354,6 +360,7 @@ async function sendSuggestion(text, source, btn) {
 }
 
 export function destroy() {
+  supportDraft?.destroy(); supportDraft = null;
   unsubSupport?.();
   unsubSupport = null;
   activeTab = "assistant";

@@ -50,10 +50,10 @@
 
     <form id="loginForm" novalidate>
       <div class="field">
-        <label for="email">البريد الإلكتروني</label>
+        <label for="email">اسم المستخدم</label>
         <div class="input-wrap">
           <i class="fas fa-envelope"></i>
-          <input type="email" id="email" autocomplete="username" placeholder="name@company.com" required>
+          <input type="text" id="email" autocomplete="username" placeholder="اسم المستخدم أو البريد" required>
         </div>
       </div>
 
@@ -75,6 +75,7 @@
 
   <script type="module">
     import { auth, signInWithEmailAndPassword, onAuthStateChanged } from "./js/firebase.js";
+    import { normalizeLogin } from "./js/config.js";
 
     const form = document.getElementById("loginForm");
     const btn  = document.getElementById("loginBtn");
@@ -97,11 +98,11 @@
 
     form.addEventListener("submit", async (e) => {
       e.preventDefault();
-      const email = emailEl.value.trim();
+      const email = normalizeLogin(emailEl.value);
       const password = passEl.value;
       msg.className = "msg";
 
-      if (!email || !password) return show("اكتب البريد الإلكتروني وكلمة المرور.", "error");
+      if (!email || !password) return show("اكتب اسم المستخدم وكلمة المرور.", "error");
 
       btn.disabled = true;
       btn.textContent = "جاري التحقق...";
@@ -120,13 +121,13 @@
 
     function errorText(code) {
       switch (code) {
-        case "auth/invalid-email":       return "صيغة البريد الإلكتروني غير صحيحة.";
+        case "auth/invalid-email":       return "اسم المستخدم فيه رموز مش مسموحة.";
         case "auth/user-disabled":       return "الحساب ده متوقف. كلّم إدارة النظام.";
         case "auth/too-many-requests":   return "محاولات كتير جداً. استنى شوية وحاول تاني.";
         case "auth/network-request-failed": return "مفيش اتصال بالإنترنت.";
         case "auth/user-not-found":
         case "auth/wrong-password":
-        case "auth/invalid-credential":  return "البريد الإلكتروني أو كلمة المرور غير صحيحة.";
+        case "auth/invalid-credential":  return "اسم المستخدم أو كلمة المرور غير صحيحة.";
         default: return "تعذّر تسجيل الدخول. حاول تاني.";
       }
     }

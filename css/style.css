@@ -511,6 +511,19 @@ table.data tbody tr:hover { background: #fafbfe; }
 .file-drop:hover, .file-drop.over { border-color: var(--primary); background: var(--primary-soft); }
 .file-drop i { font-size: 32px; color: #c5cbdd; display: block; margin-bottom: 10px; }
 
+/* ---------- المسودات والحفظ التلقائي ---------- */
+.draft-bar {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 11px 14px; margin-bottom: 14px; border-radius: 11px;
+  background: #fff8e6; border: 1px solid #ffe2a8; flex-wrap: wrap;
+}
+.draft-bar-text { display: flex; align-items: center; gap: 9px; font-size: 13px; color: #8a6100; }
+.draft-bar-text i { font-size: 14px; }
+.draft-bar-actions { display: flex; gap: 7px; }
+.draft-mount { margin-top: 10px; min-height: 16px; }
+.draft-status { font-size: 11.5px; color: var(--muted); transition: .2s; }
+.draft-status.saved { color: var(--success); }
+
 /* ---------- معرض صور وفيديو البوست ---------- */
 .media-grid {
   display: grid; gap: 10px; margin-bottom: 14px;

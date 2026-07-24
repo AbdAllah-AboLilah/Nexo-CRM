@@ -11,6 +11,9 @@ import { session, tenantPath, hasFeature } from "../auth.js";
 import { PLATFORMS } from "../config.js";
 import { el, card, esc, toast, field, confirmBox, fmtDateTime, emptyState, spinner } from "../ui.js";
 import { buildLinks } from "./settings.js";
+import { attachDraft } from "../drafts.js";
+
+let draft = null;
 
 const MAX_FILE_MB = 50;
 
@@ -331,6 +334,60 @@ export async function render(root) {
   right.append(listBox);
   loadPosts(listBox);
 
+  // ---------- الحفظ التلقائي ----------
+  const statusMount = el("div", { class: "draft-mount" });
+  editor.append(statusMount);
+
+  draft?.destroy();
+  draft = attachDraft(`publisher.${session.companyId}`, {
+    label: "مسودة بوست",
+    mount: statusMount,
+    watch: [caption, productName.input, price.input, when.input,
+      ...Object.values(platBox.querySelectorAll("input")),
+      ...Object.values(attachBox.querySelectorAll("input"))],
+    serialize: () => ({
+      caption: state.caption,
+      productName: state.productName,
+      price: state.price,
+      scheduleAt: state.scheduleAt,
+      platforms: { ...state.platforms },
+      attach: { ...state.attach },
+      media: state.media.filter((m) => m.url && !m.uploading),
+    }),
+    restore: (d) => {
+      caption.value = d.caption || "";
+      state.caption = d.caption || "";
+      productName.input.value = d.productName || "";
+      state.productName = d.productName || "";
+      price.input.value = d.price || "";
+      state.price = d.price || "";
+      if (d.scheduleAt) { when.input.value = d.scheduleAt; state.scheduleAt = d.scheduleAt; }
+
+      Object.assign(state.platforms, d.platforms || {});
+      platBox.querySelectorAll("input").forEach((input, i) => {
+        const key = Object.keys(PLATFORMS)[i];
+        if (!input.disabled) {
+          input.checked = !!state.platforms[key];
+          input.closest(".check-row")?.classList.toggle("checked", input.checked);
+        }
+      });
+
+      Object.assign(state.attach, d.attach || {});
+      attachBox.querySelectorAll("input").forEach((input, i) => {
+        const key = attachDefs[i]?.key;
+        if (key && !input.disabled) {
+          input.checked = !!state.attach[key];
+          input.closest(".check-row")?.classList.toggle("checked", input.checked);
+        }
+      });
+
+      state.media = Array.isArray(d.media) ? d.media : [];
+      drawMedia();
+      refresh();
+    },
+  });
+  draft.offerRestore(editor);
+
   refresh();
 
   function refresh() {
@@ -417,6 +474,7 @@ async function submit(status) {
       createdBy: session.user.uid,
       createdByName: session.profile.name || "",
     });
+    draft?.clear();   // اتحفظ في السحابة خلاص، مش محتاجين المسودة المحلية
     toast(status === "draft" ? "تم الحفظ كمسودة" : "تم إضافة البوست لقائمة النشر", "success");
     import("../router.js").then((r) => r.reloadCurrent());
   } catch (e) {
@@ -469,6 +527,9 @@ function mkToggleBtn(icon, active) {
 }
 
 export function destroy() {
+  draft?.flush();      // نحفظ اللي اتكتب قبل ما نسيب الشاشة
+  draft?.destroy();
+  draft = null;
   state = { caption: "", platforms: { facebook: false, instagram: false, telegram: false, whatsapp: false },
     attach: { address: false, hours: false, phones: false, links: false, price: false },
     price: "", productName: "", scheduleAt: "", previewMobile: false,

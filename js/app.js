@@ -18,11 +18,10 @@ async function loadSystemVersion() {
     const res = await fetch("version.json", { cache: "no-cache" });
     if (res.ok) SYSTEM_VERSION = await res.json();
   } catch { /* أوفلاين — نستخدم رقم config */ }
-  // إصدار الشركة (لو موجود) بيتعرض له الأولوية، وإلا رقم النظام
-  const shown = session.company?.version || SYSTEM_VERSION.full;
-  $("appVersion").textContent = shown;
+  // كل الشركات بتشوف إصدار النظام الحالي — التحكم في الميزات مش في الرقم
+  $("appVersion").textContent = SYSTEM_VERSION.full;
   $("appVersion").title = SYSTEM_VERSION.builtAt
-    ? `إصدار النظام: ${SYSTEM_VERSION.full} · ${SYSTEM_VERSION.builtAt}` : "";
+    ? `آخر تحديث: ${SYSTEM_VERSION.builtAt}` : "";
 }
 window.nexoSystemVersion = () => SYSTEM_VERSION;
 
@@ -150,7 +149,6 @@ function showAbout() {
       <p class="text-muted">نظام متكامل لإدارة الصفحات والتواصل</p>
       <div class="kv"><span>إصدار النظام</span><strong>${esc(SYSTEM_VERSION.full)}${SYSTEM_VERSION.build ? ` · build ${SYSTEM_VERSION.build}` : ""}</strong></div>
       <div class="kv"><span>تاريخ آخر تحديث</span><strong>${esc(SYSTEM_VERSION.builtAt || "—")}</strong></div>
-      <div class="kv"><span>إصدار الشركة</span><strong>${esc(session.company?.version || "متابع للنظام")}</strong></div>
       <div class="kv"><span>المستخدم</span><strong>${esc(session.user.email)}</strong></div>
       <div class="kv"><span>الصلاحية</span><strong>${esc(ROLES[session.profile.role]?.label || "")}</strong></div>
     </div>`,

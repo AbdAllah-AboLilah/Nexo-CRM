@@ -7,7 +7,7 @@ import {
   fns, httpsCallable,
 } from "../firebase.js";
 import { session, isSuper, atLeast } from "../auth.js";
-import { ROLES, ROLE_ORDER } from "../config.js";
+import { ROLES, ROLE_ORDER, normalizeLogin, displayLogin, USER_DOMAIN } from "../config.js";
 import { el, card, esc, toast, modal, confirmBox, field, spinner, emptyState, fmtDate } from "../ui.js";
 
 let users = [];
@@ -90,7 +90,7 @@ async function load(body) {
     const tr = el("tr");
     tr.innerHTML = `
       <td><strong>${esc(u.name || "—")}</strong></td>
-      <td dir="ltr" style="text-align:start;font-size:13px" class="text-muted">${esc(u.email)}</td>
+      <td dir="ltr" style="text-align:start;font-size:13px" class="text-muted">${esc(displayLogin(u.email))}</td>
       <td><span class="badge badge-blue">${esc(ROLES[u.role]?.label || u.role)}</span></td>
       <td>${u.active === false ? '<span class="badge badge-red">موقوف</span>' : '<span class="badge badge-green">نشط</span>'}</td>
       <td class="text-muted" style="font-size:12px">${fmtDate(u.createdAt)}</td>`;
@@ -135,10 +135,20 @@ function availableRoles() {
 function userForm(existing = null) {
   const name = field({ label: "الاسم *", name: "name", value: existing?.name || "" });
   const email = field({
-    label: "البريد الإلكتروني *", name: "email", type: "email", value: existing?.email || "",
-    placeholder: "name@company.com",
-    hint: existing ? "" : "لازم بريد كامل — مش اسم لوحده. ومش شرط يكون بريد حقيقي، بس لازم يكون بالشكل ده.",
+    label: "اسم المستخدم *", name: "email", type: "text",
+    value: existing ? displayLogin(existing.email) : "",
+    placeholder: "مثال: ahmed أو ahmed@company.com",
   });
+  const loginPreview = el("small", { class: "hint" });
+  email.wrap.append(loginPreview);
+  const updatePreview = () => {
+    const v = email.input.value.trim();
+    loginPreview.innerHTML = v
+      ? `هيدخل بالاسم ده: <strong dir="ltr">${esc(normalizeLogin(v))}</strong>`
+      : `اكتب أي اسم — النظام هيكمّله لوحده (مثلاً <code dir="ltr">ahmed@${USER_DOMAIN}</code>)`;
+  };
+  email.input.addEventListener("input", updatePreview);
+  updatePreview();
   if (existing) email.input.disabled = true;
   const pass = field({ label: existing ? "كلمة مرور جديدة (سيبها فاضية لو مش هتغيرها)" : "كلمة المرور *",
     name: "password", type: "password", hint: "6 حروف على الأقل" });
@@ -161,16 +171,16 @@ function userForm(existing = null) {
         onClick: async ({ close, button }) => {
           const payload = {
             name: name.input.value.trim(),
-            email: email.input.value.trim(),
+            email: normalizeLogin(email.input.value),   // ← بيكمّل الاسم لوحده
             password: pass.input.value,
             role: role.input.value,
             companyId: session.companyId,
             uid: existing?.id || null,
           };
-          if (!payload.name) return toast("اكتب اسم المستخدم", "error");
-          if (!payload.email) return toast("اكتب البريد الإلكتروني", "error");
+          if (!payload.name) return toast("اكتب اسم الموظف", "error");
+          if (!email.input.value.trim()) return toast("اكتب اسم المستخدم", "error");
           if (!isEmail(payload.email))
-            return toast("البريد الإلكتروني مش مكتوب صح — لازم يكون بالشكل ده: name@company.com", "error");
+            return toast("اسم المستخدم فيه رموز مش مسموحة — استخدم حروف وأرقام بس", "error");
           if (!existing && payload.password.length < 6) return toast("كلمة المرور لازم 6 حروف على الأقل", "error");
 
           button.disabled = true;
