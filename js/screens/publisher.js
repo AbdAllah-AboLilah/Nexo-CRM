@@ -438,7 +438,8 @@ export function composeText(platform) {
   if (state.attach.phones && k.phones) out += `\n📞 للتواصل: ${k.phones}`;
 
   if (state.attach.links) {
-    const links = buildLinks(k);
+    const botUser = k.telegramBot || c?.integrations?.telegram?.botUsername;
+    const links = buildLinks({ ...k, telegramBot: botUser });
     delete links[platform];               // ← الاستبعاد الذكي
     if (platform === "telegram") delete links.telegramBot;
     const parts = Object.entries(links).map(([p, u]) => `${LINK_LABELS[p] || PLATFORMS[p]?.label || p}: ${u}`);

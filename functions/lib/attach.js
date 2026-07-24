@@ -38,7 +38,9 @@ function appendConstants(reply, company, platform) {
   if (attach.phones && k.phones) parts.push(`📞 ${k.phones}`);
 
   if (attach.links) {
-    const links = buildLinks(k);
+    // يوزر البوت من الثوابت أو من الربط مباشرة (أيهما موجود)
+    const botUser = k.telegramBot || company?.integrations?.telegram?.botUsername;
+    const links = buildLinks({ ...k, telegramBot: botUser });
     delete links[platform];                 // الاستبعاد الذكي
     if (platform === "telegram") delete links.telegramBot;
     const linkLines = Object.entries(links).map(([p, u]) => `${LABELS[p] || p}: ${u}`);

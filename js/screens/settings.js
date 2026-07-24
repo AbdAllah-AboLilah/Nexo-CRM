@@ -135,7 +135,9 @@ export function buildLinks(k = session.company?.constants || {}) {
   const links = {};
   if (k.whatsappNumber) links.whatsapp = `https://wa.me/${k.whatsappNumber.replace(/\D/g, "")}`;
   if (k.telegramChannel) links.telegram = `https://t.me/${k.telegramChannel.replace(/^@/, "")}`;
-  if (k.telegramBot) links.telegramBot = `https://t.me/${String(k.telegramBot).replace(/^@/, "")}`;
+  // يوزر البوت بيتجاب من الثوابت أو من الربط مباشرة (أيهما موجود)
+  const botUser = k.telegramBot || session.company?.integrations?.telegram?.botUsername;
+  if (botUser) links.telegramBot = `https://t.me/${String(botUser).replace(/^@/, "")}`;
   if (k.instagramUser) links.instagram = `https://instagram.com/${k.instagramUser.replace(/^@/, "")}`;
   if (k.facebookPage) links.facebook = k.facebookPage;
   return links;
