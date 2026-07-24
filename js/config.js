@@ -59,6 +59,14 @@ export const PLATFORMS = {
   whatsapp:  { label: "واتساب",   icon: "fab fa-whatsapp",    color: "#25d366", feature: "canPostWhatsapp" },
 };
 
+// بوت تليجرام مش منصة نشر — بس بيظهر كلينك تواصل في البوستات والردود
+export const LINK_LABELS = {
+  ...Object.fromEntries(Object.entries({
+    facebook: "فيسبوك", instagram: "انستجرام", telegram: "تليجرام", whatsapp: "واتساب",
+  })),
+  telegramBot: "كلّمنا على تليجرام",
+};
+
 // ---------- نبرة الرد ----------
 export const AI_TONES = {
   funny:    { label: "مرح وفكاهي", desc: "إيموجيز وخفة دم وعامية دافية" },
@@ -89,6 +97,7 @@ export const DEFAULT_CONSTANTS = {
   whatsappNumber: "",
   instagramUser: "",
   telegramChannel: "",
+  telegramBot: "",
   facebookPage: "",
 };
 

@@ -6,6 +6,7 @@
 const LABELS = {
   whatsapp: "واتساب",
   telegram: "تليجرام",
+  telegramBot: "كلّمنا على تليجرام",
   instagram: "انستجرام",
   facebook: "فيسبوك",
 };
@@ -15,6 +16,7 @@ function buildLinks(k = {}) {
   const links = {};
   if (k.whatsappNumber) links.whatsapp = `https://wa.me/${String(k.whatsappNumber).replace(/\D/g, "")}`;
   if (k.telegramChannel) links.telegram = `https://t.me/${String(k.telegramChannel).replace(/^@/, "")}`;
+  if (k.telegramBot) links.telegramBot = `https://t.me/${String(k.telegramBot).replace(/^@/, "")}`;
   if (k.instagramUser) links.instagram = `https://instagram.com/${String(k.instagramUser).replace(/^@/, "")}`;
   if (k.facebookPage) links.facebook = k.facebookPage;
   return links;
@@ -38,6 +40,7 @@ function appendConstants(reply, company, platform) {
   if (attach.links) {
     const links = buildLinks(k);
     delete links[platform];                 // الاستبعاد الذكي
+    if (platform === "telegram") delete links.telegramBot;
     const linkLines = Object.entries(links).map(([p, u]) => `${LABELS[p] || p}: ${u}`);
     if (linkLines.length) parts.push(linkLines.join("\n"));
   }

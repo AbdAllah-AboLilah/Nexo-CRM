@@ -3,7 +3,7 @@
 // ============================================================
 import { db, doc, updateDoc, fns, httpsCallable } from "../firebase.js";
 import { session, refreshCompany, atLeast } from "../auth.js";
-import { AI_TONES, DEFAULT_AI, PLATFORMS } from "../config.js";
+import { AI_TONES, DEFAULT_AI, PLATFORMS, LINK_LABELS } from "../config.js";
 import { buildLinks } from "./settings.js";
 import { el, card, esc, toast, field, toggle } from "../ui.js";
 
@@ -127,8 +127,8 @@ export async function render(root) {
     if (dmInputs.phones.checked && k.phones) parts.push(`📞 ${k.phones}`);
     if (dmInputs.links.checked) {
       const links = buildLinks(k);
-      delete links.telegram;   // مثال: العميل جاي من تليجرام
-      const lines = Object.entries(links).map(([p, u]) => `${PLATFORMS[p]?.label || p}: ${u}`);
+      delete links.telegram; delete links.telegramBot;   // مثال: العميل جاي من تليجرام
+      const lines = Object.entries(links).map(([p, u]) => `${LINK_LABELS[p] || PLATFORMS[p]?.label || p}: ${u}`);
       if (lines.length) parts.push(lines.join("\n"));
     }
     dmPreview.innerHTML = `<strong>معاينة (عميل جاي من تليجرام)</strong><div style="white-space:pre-wrap;font-size:13px">${

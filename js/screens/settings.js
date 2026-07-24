@@ -3,7 +3,7 @@
 // ============================================================
 import { db, doc, updateDoc, fns, httpsCallable } from "../firebase.js";
 import { session, refreshCompany, atLeast, hasFeature } from "../auth.js";
-import { DEFAULT_CONSTANTS, PLATFORMS } from "../config.js";
+import { DEFAULT_CONSTANTS, PLATFORMS, LINK_LABELS } from "../config.js";
 import { el, card, esc, toast, field, modal, spinner } from "../ui.js";
 
 export async function render(root) {
@@ -107,7 +107,7 @@ function linksCard() {
     });
     preview.innerHTML = `<strong>معاينة الروابط المولّدة</strong>${
       Object.keys(links).length
-        ? Object.entries(links).map(([p, u]) => `<div>${esc(PLATFORMS[p]?.label || p)}: <code>${esc(u)}</code></div>`).join("")
+        ? Object.entries(links).map(([p, u]) => `<div>${esc(LINK_LABELS[p] || PLATFORMS[p]?.label || p)}: <code>${esc(u)}</code></div>`).join("")
         : '<span class="text-muted">لسه مفيش بيانات مكتوبة</span>'}`;
   };
   [wa, ig, tg, fb].forEach((f) => f.input.addEventListener("input", update));
@@ -135,6 +135,7 @@ export function buildLinks(k = session.company?.constants || {}) {
   const links = {};
   if (k.whatsappNumber) links.whatsapp = `https://wa.me/${k.whatsappNumber.replace(/\D/g, "")}`;
   if (k.telegramChannel) links.telegram = `https://t.me/${k.telegramChannel.replace(/^@/, "")}`;
+  if (k.telegramBot) links.telegramBot = `https://t.me/${String(k.telegramBot).replace(/^@/, "")}`;
   if (k.instagramUser) links.instagram = `https://instagram.com/${k.instagramUser.replace(/^@/, "")}`;
   if (k.facebookPage) links.facebook = k.facebookPage;
   return links;

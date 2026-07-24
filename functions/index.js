@@ -169,6 +169,8 @@ exports.saveIntegration = onCall({ secrets: [TOKEN_ENC_KEY] }, async (req) => {
 
     await db.doc(`companies/${companyId}`).set({
       integrations: { telegram: { connected: true, botUsername: me.username || "" } },
+      // يوزر البوت بيدخل الروابط الذكية تلقائياً عشان العميل يعرف يكلّم مين
+      constants: { telegramBot: me.username || "" },
     }, { merge: true });
 
     await audit(companyId, "integration.telegram.connect", profile, { bot: me.username });
@@ -334,8 +336,8 @@ async function handleIncoming({ company, platform, externalId, customerName, tex
 
   // تجهيز البيانات للـ AI
   const [productsSnap, historySnap] = await Promise.all([
-    db.collection(`companies/${companyId}/products`).limit(300).get(),
-    convRef.collection("messages").orderBy("createdAt", "desc").limit(6).get(),
+    db.collection(`companies/${companyId}/products`).limit(150).get(),
+    convRef.collection("messages").orderBy("createdAt", "desc").limit(5).get(),
   ]);
   const products = productsSnap.docs.map((d) => d.data());
   const history = historySnap.docs.map((d) => d.data()).reverse();
@@ -432,10 +434,107 @@ exports.dispatchOutbound = onDocumentCreated(
       await msgRef.update({ deliveryStatus: "failed", deliveryError: String(e.message).slice(0, 200) });
     }
   });
+// ============================================================
+//  6) الناشر — نشر فوري بمجرد الحفظ، والمجدول كل 5 دقايق
+// ============================================================
 
-// ============================================================
-//  6) الناشر المجدول — بيشتغل كل 5 دقايق وينشر اللي جه معاده
-// ============================================================
+/** نشر بوست واحد على كل منصاته. بيرجّع true لو نزل على منصة واحدة على الأقل. */
+async function publishOnePost(companyId, postRef, post) {
+  const results = {};
+  const messageIds = {};   // معرّف الرسالة على كل منصة (لتقرير البوست)
+  const audience = {};     // عدد أعضاء القناة وقت النشر
+
+  for (const platform of post.platforms || []) {
+    try {
+      const text = post.versions?.[platform] || post.caption;
+
+      if (platform === "telegram") {
+        const s = await db.doc(`companies/${companyId}/secrets/telegram`).get();
+        if (!s.exists) throw new Error("مفيش توكن تليجرام");
+        const token = decrypt(s.data().token, TOKEN_ENC_KEY.value());
+        const chatId = s.data().chatId;
+        if (!chatId) throw new Error("مفيش معرّف قناة");
+
+        const media = Array.isArray(post.media) ? post.media : [];
+        const photos = media.filter((m) => m.type === "image" && m.url);
+        const videos = media.filter((m) => m.type === "video" && m.url);
+
+        if (photos.length || videos.length) {
+          // تليجرام بيحط الكابشن على أول ملف بس (الحد 1024 حرف)
+          const caption = text.length > 1024 ? text.slice(0, 1021) + "..." : text;
+          const first = photos[0] || videos[0];
+          const sent = first.type === "image"
+            ? await telegram.sendPhoto(token, chatId, first.url, caption)
+            : await telegram.sendVideo(token, chatId, first.url, caption);
+          messageIds.telegram = sent?.message_id || null;
+
+          for (const m of media.filter((x) => x !== first && x.url)) {
+            if (m.type === "image") await telegram.sendPhoto(token, chatId, m.url, "");
+            else await telegram.sendVideo(token, chatId, m.url, "");
+          }
+          if (text.length > 1024) await telegram.sendMessage(token, chatId, text);
+        } else {
+          const sent = await telegram.sendMessage(token, chatId, text);
+          messageIds.telegram = sent?.message_id || null;
+        }
+
+        try { audience.telegram = await telegram.getChatMemberCount(token, chatId); }
+        catch { /* مش مشكلة لو فشل */ }
+
+        results[platform] = "sent";
+      } else {
+        results[platform] = "skipped"; // لسه مش مربوط
+      }
+    } catch (e) {
+      results[platform] = "failed: " + String(e.message).slice(0, 120);
+      logger.error(`publish ${platform} failed`, e);
+    }
+  }
+
+  const anySent = Object.values(results).includes("sent");
+  await postRef.update({
+    status: anySent ? "published" : "failed",
+    results, messageIds, audience,
+    publishedAt: admin.firestore.FieldValue.serverTimestamp(),
+  });
+
+  const preview = String(post.caption || "").slice(0, 70);
+  const failed = Object.entries(results).filter(([, v]) => String(v).startsWith("failed"));
+  await notify(await usersAtLeast(companyId, "manager"), anySent
+    ? {
+        type: "post_published",
+        title: "البوست نزل بنجاح ✅",
+        body: failed.length ? `${preview} — بس فشل على: ${failed.map(([p]) => p).join("، ")}` : preview,
+      }
+    : {
+        type: "post_failed",
+        title: "فشل نشر بوست ❌",
+        body: `${preview} — ${failed[0]?.[1] || "سبب غير معروف"}`,
+      });
+
+  return anySent;
+}
+
+/** النشر الفوري: بمجرد ما البوست يتحفظ بدون موعد، ينزل على طول */
+exports.onPostQueued = onDocumentCreated(
+  { document: "companies/{companyId}/posts/{postId}", secrets: [TOKEN_ENC_KEY] },
+  async (event) => {
+    const post = event.data?.data();
+    if (!post || post.status !== "queued") return;
+    if (post.scheduledAt) return;   // ده مجدول، الدالة المجدولة هتاخده
+
+    try {
+      await publishOnePost(event.params.companyId, event.data.ref, post);
+    } catch (e) {
+      logger.error("instant publish failed", e);
+      await event.data.ref.update({
+        status: "failed",
+        results: { _error: String(e.message).slice(0, 200) },
+      });
+    }
+  });
+
+/** المجدول: بيمشي كل 5 دقايق وياخد اللي جه معاده */
 exports.runScheduledPosts = onSchedule(
   { schedule: "every 5 minutes", timeZone: "Africa/Cairo", secrets: [TOKEN_ENC_KEY] },
   async () => {
@@ -452,78 +551,9 @@ exports.runScheduledPosts = onSchedule(
       for (const postDoc of due.docs) {
         const post = postDoc.data();
         if (post.scheduledAt && post.scheduledAt.toMillis() > now.toMillis()) continue;
-
-        const results = {};
-        const messageIds = {};   // معرّف الرسالة على كل منصة (لتقرير البوست)
-        const audience = {};     // عدد المتابعين وقت النشر
-        for (const platform of post.platforms || []) {
-          try {
-            const text = post.versions?.[platform] || post.caption;
-            if (platform === "telegram") {
-              const s = await db.doc(`companies/${companyId}/secrets/telegram`).get();
-              if (!s.exists) throw new Error("مفيش توكن تليجرام");
-              const token = decrypt(s.data().token, TOKEN_ENC_KEY.value());
-              const chatId = s.data().chatId;
-              if (!chatId) throw new Error("مفيش معرّف قناة");
-
-              const media = Array.isArray(post.media) ? post.media : [];
-              const photos = media.filter((m) => m.type === "image" && m.url);
-              const videos = media.filter((m) => m.type === "video" && m.url);
-
-              if (photos.length || videos.length) {
-                // تليجرام بيحط الكابشن على أول ملف بس (الحد 1024 حرف)
-                const caption = text.length > 1024 ? text.slice(0, 1021) + "..." : text;
-                const first = photos[0] || videos[0];
-                const sent = first.type === "image"
-                  ? await telegram.sendPhoto(token, chatId, first.url, caption)
-                  : await telegram.sendVideo(token, chatId, first.url, caption);
-                messageIds.telegram = sent?.message_id || null;
-
-                for (const m of media.filter((x) => x !== first && x.url)) {
-                  if (m.type === "image") await telegram.sendPhoto(token, chatId, m.url, "");
-                  else await telegram.sendVideo(token, chatId, m.url, "");
-                }
-                // لو النص أطول من حد الكابشن، نبعت الباقي كرسالة
-                if (text.length > 1024) await telegram.sendMessage(token, chatId, text);
-              } else {
-                const sent = await telegram.sendMessage(token, chatId, text);
-                messageIds.telegram = sent?.message_id || null;
-              }
-
-              // عدد المتابعين وقت النشر — أساس تقرير الوصول
-              try { audience.telegram = await telegram.getChatMemberCount(token, chatId); }
-              catch { /* مش مشكلة لو فشل */ }
-
-              results[platform] = "sent";
-            } else {
-              results[platform] = "skipped"; // لسه مش مربوط
-            }
-          } catch (e) {
-            results[platform] = "failed: " + String(e.message).slice(0, 120);
-            logger.error(`publish ${platform} failed`, e);
-          }
-        }
-
-        const anySent = Object.values(results).includes("sent");
-        await postDoc.ref.update({
-          status: anySent ? "published" : "failed",
-          results, messageIds, audience,
-          publishedAt: admin.firestore.FieldValue.serverTimestamp(),
-        });
-
-        const preview = String(post.caption || "").slice(0, 70);
-        const failed = Object.entries(results).filter(([, v]) => String(v).startsWith("failed"));
-        await notify(await usersAtLeast(companyId, "manager"), anySent
-          ? {
-              type: "post_published",
-              title: "البوست نزل بنجاح ✅",
-              body: failed.length ? `${preview} — بس فشل على: ${failed.map(([p]) => p).join("، ")}` : preview,
-            }
-          : {
-              type: "post_failed",
-              title: "فشل نشر بوست ❌",
-              body: `${preview} — ${failed[0]?.[1] || "سبب غير معروف"}`,
-            });
+        try {
+          await publishOnePost(companyId, postDoc.ref, post);
+        } catch (e) { logger.error("scheduled publish failed", e); }
       }
     }
   });

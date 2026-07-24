@@ -94,6 +94,9 @@ async function generateReply({ company, products, userMessage, history = [], cha
       systemInstruction: instruction,
       responseMimeType: "application/json",
       temperature: 0.8,
+      maxOutputTokens: 700,
+      // ردود خدمة العملاء قصيرة ومباشرة — التفكير الداخلي بيبطّئ من غير فايدة
+      thinkingConfig: { thinkingBudget: 0 },
     },
   });
 

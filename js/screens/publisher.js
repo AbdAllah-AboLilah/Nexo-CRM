@@ -8,7 +8,7 @@ import {
   fns, httpsCallable,
 } from "../firebase.js";
 import { session, tenantPath, hasFeature } from "../auth.js";
-import { PLATFORMS } from "../config.js";
+import { PLATFORMS, LINK_LABELS } from "../config.js";
 import { el, card, esc, toast, field, confirmBox, modal, fmtDateTime, emptyState, spinner } from "../ui.js";
 import { buildLinks } from "./settings.js";
 import { attachDraft } from "../drafts.js";
@@ -440,7 +440,8 @@ export function composeText(platform) {
   if (state.attach.links) {
     const links = buildLinks(k);
     delete links[platform];               // ← الاستبعاد الذكي
-    const parts = Object.entries(links).map(([p, u]) => `${PLATFORMS[p]?.label || p}: ${u}`);
+    if (platform === "telegram") delete links.telegramBot;
+    const parts = Object.entries(links).map(([p, u]) => `${LINK_LABELS[p] || PLATFORMS[p]?.label || p}: ${u}`);
     if (parts.length) out += `\n\n🔗 تواصل معانا:\n${parts.join("\n")}`;
   }
   return out;
@@ -545,7 +546,7 @@ function postReport(p) {
       el("div", { style: "flex:1;min-width:130px" }, [
         el("strong", { style: "font-size:14px", text: plat?.label || key }),
         el("div", { class: "text-muted", style: "font-size:12px;margin-top:3px",
-          text: ok ? (reach ? `وصل لـ ${Number(reach).toLocaleString("ar-EG")} متابع` : "اتنشر بنجاح")
+          text: ok ? (reach ? `${Number(reach).toLocaleString("ar-EG")} عضو في القناة وقت النشر` : "اتنشر بنجاح")
              : skipped ? "المنصة مش مربوطة" : String(res).replace("failed: ", "") }),
       ]),
       el("span", { class: `badge ${ok ? "badge-green" : skipped ? "badge-gray" : "badge-red"}`,
