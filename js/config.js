@@ -97,6 +97,8 @@ export const DEFAULT_AI = {
   tone: "egyptian",
   businessType: "",
   extraInstructions: "",
+  // إيه اللي يترفق تلقائياً في ردود الرسائل الخاصة
+  dmAttach: { address: false, hours: false, phones: false, links: false },
   commentTemplates: [
     "بعتنالك السعر في الرسايل يا قمر 🌸",
     "شيكي على الخاص يا سكر، التفاصيل كلها هناك 📩",
@@ -128,5 +130,6 @@ export const NAV = [
   { id: "users",     label: "المستخدمين والصلاحيات",  icon: "fa-users",         roles: ["superadmin","owner"] },
   { id: "settings",  label: "الثوابت وبيانات الشركة", icon: "fa-cog",           roles: ["superadmin","owner"] },
   { id: "help",      label: "مركز المساعدة",          icon: "fa-circle-question", roles: ["superadmin","owner","manager","agent"] },
+  { id: "insights",  label: "إحصائيات الشركات",       icon: "fa-chart-line",    roles: ["superadmin"], badge: "Admin" },
   { id: "support",   label: "الدعم والاقتراحات",      icon: "fa-headset",       roles: ["superadmin"], badge: "Admin" },
 ];

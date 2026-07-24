@@ -9,7 +9,7 @@ import {
 } from "../firebase.js";
 import { session, tenantPath, hasFeature } from "../auth.js";
 import { PLATFORMS } from "../config.js";
-import { el, card, esc, toast, field, confirmBox, fmtDateTime, emptyState, spinner } from "../ui.js";
+import { el, card, esc, toast, field, confirmBox, modal, fmtDateTime, emptyState, spinner } from "../ui.js";
 import { buildLinks } from "./settings.js";
 import { attachDraft } from "../drafts.js";
 
@@ -501,6 +501,12 @@ async function loadPosts(box) {
         ]),
         el("span", { class: `badge ${badges[0]}`, text: badges[1] }),
       ]);
+      if (p.status === "published") {
+        const rep = el("button", { class: "btn btn-light btn-sm", html: '<i class="fas fa-chart-simple"></i>', title: "تقرير البوست" });
+        rep.addEventListener("click", () => postReport(p));
+        item.append(rep);
+      }
+
       const del = el("button", { class: "btn btn-light btn-sm", html: '<i class="fas fa-trash"></i>' });
       del.addEventListener("click", async () => {
         if (!(await confirmBox("هتمسح البوست ده؟", { title: "حذف بوست" }))) return;
@@ -515,6 +521,86 @@ async function loadPosts(box) {
     box.innerHTML = "";
     box.append(el("p", { class: "text-muted", text: "تعذّر تحميل البوستات: " + e.message }));
   }
+}
+
+/** تقرير مفصّل عن بوست منشور */
+function postReport(p) {
+  const body = el("div");
+
+  body.append(el("div", { class: "ai-insight", style: "margin-bottom:16px",
+    html: `<strong>نص البوست</strong><div style="white-space:pre-wrap;font-size:13px">${esc((p.caption || "").slice(0, 300))}</div>` }));
+
+  // حالة النشر على كل منصة
+  const rows = el("div");
+  (p.platforms || []).forEach((key) => {
+    const plat = PLATFORMS[key];
+    const res = p.results?.[key] || "—";
+    const ok = res === "sent";
+    const skipped = res === "skipped";
+
+    const reach = p.audience?.[key];
+    rows.append(el("div", { style: "display:flex;align-items:center;gap:12px;padding:12px 0;border-bottom:1px solid #f2f4f9;flex-wrap:wrap" }, [
+      el("div", { style: `width:38px;height:38px;border-radius:11px;display:flex;align-items:center;justify-content:center;background:${plat?.color || "#999"}1a;color:${plat?.color || "#999"};font-size:16px`,
+        html: `<i class="${plat?.icon || "fas fa-globe"}"></i>` }),
+      el("div", { style: "flex:1;min-width:130px" }, [
+        el("strong", { style: "font-size:14px", text: plat?.label || key }),
+        el("div", { class: "text-muted", style: "font-size:12px;margin-top:3px",
+          text: ok ? (reach ? `وصل لـ ${Number(reach).toLocaleString("ar-EG")} متابع` : "اتنشر بنجاح")
+             : skipped ? "المنصة مش مربوطة" : String(res).replace("failed: ", "") }),
+      ]),
+      el("span", { class: `badge ${ok ? "badge-green" : skipped ? "badge-gray" : "badge-red"}`,
+        text: ok ? "منشور" : skipped ? "متخطّي" : "فشل" }),
+    ]));
+  });
+  body.append(rows);
+
+  // التفاعلات — الجزء اللي محتاج موافقة المنصات
+  const engagement = p.engagement || {};
+  const hasEngagement = Object.keys(engagement).length > 0;
+
+  body.append(el("h4", { class: "card-title", style: "margin-top:22px", text: "التفاعل على البوست" }));
+
+  if (hasEngagement) {
+    const grid = el("div", { class: "grid grid-4" });
+    [
+      ["comments", "تعليقات", "fa-comment"],
+      ["reactions", "تفاعلات", "fa-heart"],
+      ["shares", "مشاركات", "fa-share"],
+      ["views", "مشاهدات", "fa-eye"],
+    ].forEach(([k, label, icon]) => {
+      const total = Object.values(engagement).reduce((s, e) => s + (Number(e?.[k]) || 0), 0);
+      grid.append(el("div", { class: "card stat-card" }, [
+        el("div", { class: "stat-icon", style: "background:#4361ee1a;color:#4361ee" }, [el("i", { class: `fas ${icon}` })]),
+        el("div", { class: "stat-label", text: label }),
+        el("div", { class: "stat-number", style: "font-size:24px", text: total.toLocaleString("ar-EG") }),
+      ]));
+    });
+    body.append(grid);
+  } else {
+    body.append(el("div", { class: "ai-insight warn", html:
+      `<strong>لسه مش متاح</strong>
+       أرقام التعليقات والتفاعلات والمشاركات بتيجي من المنصة نفسها، وكل منصة ليها وضعها:
+       <div style="margin-top:8px;line-height:2">
+       • <b>تليجرام:</b> بيدي عدد أعضاء القناة ✅ (موضّح فوق)، لكن البوت مابيقدرش يقرا مشاهدات أو تفاعلات البوست<br>
+       • <b>فيسبوك وانستجرام:</b> بيدوا كل الأرقام — بعد موافقة ميتا على التطبيق 🔒<br>
+       • <b>واتساب:</b> مالوش تفاعلات أصلاً
+       </div>` }));
+  }
+
+  body.append(el("div", { class: "kv", style: "margin-top:18px" }, [
+    el("span", { text: "اتنشر" }), el("strong", { text: fmtDateTime(p.publishedAt) })]));
+  if (p.createdByName) {
+    body.append(el("div", { class: "kv" }, [
+      el("span", { text: "بواسطة" }), el("strong", { text: p.createdByName })]));
+  }
+  if (p.price) {
+    body.append(el("div", { class: "kv" }, [
+      el("span", { text: "المنتج والسعر" }),
+      el("strong", { text: `${p.productName || "—"} · ${p.price} جنيه` })]));
+  }
+
+  modal({ title: "تقرير البوست", body, width: 620,
+    actions: [{ label: "إغلاق", class: "btn-light", onClick: ({ close }) => close() }] });
 }
 
 function mkBtn(label, cls, icon, onClick) {

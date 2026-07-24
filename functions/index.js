@@ -14,6 +14,7 @@ const { generateReply, assistPost, helpAnswer, ping, ASSIST_TASKS } = require(".
 const { buildKnowledgeText } = require("./lib/kb");
 const { notify, usersOf, usersAtLeast, superAdmins } = require("./lib/notify");
 const telegram = require("./lib/telegram");
+const { appendConstants } = require("./lib/attach");
 
 admin.initializeApp();
 const db = admin.firestore();
@@ -313,6 +314,7 @@ async function handleIncoming({ company, platform, externalId, customerName, tex
     lastMessageAt: admin.firestore.FieldValue.serverTimestamp(),
     messageCount: admin.firestore.FieldValue.increment(1),
     status: conv?.status === "in_progress" ? "in_progress" : (conv?.status || "new"),
+    awaitingSince: conv?.awaitingSince || admin.firestore.FieldValue.serverTimestamp(),
     aiEnabled: conv?.aiEnabled !== false,
     createdAt: conv?.createdAt || admin.firestore.FieldValue.serverTimestamp(),
   }, { merge: true });
@@ -359,8 +361,13 @@ async function handleIncoming({ company, platform, externalId, customerName, tex
     return;
   }
 
+  // الرسائل الخاصة بيترفق معاها الثوابت المختارة؛ التعليقات العامة بتفضل مختصرة
+  const finalReply = channel === "message"
+    ? appendConstants(result.reply, company, platform)
+    : result.reply;
+
   await convRef.collection("messages").add({
-    from: "ai", text: result.reply, intent: result.intent,
+    from: "ai", text: finalReply, intent: result.intent,
     createdAt: admin.firestore.FieldValue.serverTimestamp(),
     deliveryStatus: "pending",
   });
@@ -388,9 +395,25 @@ exports.dispatchOutbound = onDocumentCreated(
     const msgRef = event.data.ref;
 
     try {
-      const convSnap = await db.doc(`companies/${companyId}/conversations/${convId}`).get();
+      const convRef = db.doc(`companies/${companyId}/conversations/${convId}`);
+      const convSnap = await convRef.get();
       if (!convSnap.exists) return;
       const conv = convSnap.data();
+
+      // قياس وقت الرد: الفرق بين وصول رسالة العميل وأول رد عليها
+      if (conv.awaitingSince) {
+        const waitedMs = Date.now() - conv.awaitingSince.toMillis();
+        if (waitedMs >= 0 && waitedMs < 7 * 24 * 3600 * 1000) {
+          await convRef.update({
+            awaitingSince: admin.firestore.FieldValue.delete(),
+            lastResponseMs: waitedMs,
+            totalResponseMs: admin.firestore.FieldValue.increment(waitedMs),
+            responseCount: admin.firestore.FieldValue.increment(1),
+            [msg.from === "agent" ? "humanReplies" : "aiReplies"]:
+              admin.firestore.FieldValue.increment(1),
+          });
+        }
+      }
 
       if (conv.platform === "telegram") {
         const secretSnap = await db.doc(`companies/${companyId}/secrets/telegram`).get();
@@ -431,6 +454,8 @@ exports.runScheduledPosts = onSchedule(
         if (post.scheduledAt && post.scheduledAt.toMillis() > now.toMillis()) continue;
 
         const results = {};
+        const messageIds = {};   // معرّف الرسالة على كل منصة (لتقرير البوست)
+        const audience = {};     // عدد المتابعين وقت النشر
         for (const platform of post.platforms || []) {
           try {
             const text = post.versions?.[platform] || post.caption;
@@ -449,8 +474,10 @@ exports.runScheduledPosts = onSchedule(
                 // تليجرام بيحط الكابشن على أول ملف بس (الحد 1024 حرف)
                 const caption = text.length > 1024 ? text.slice(0, 1021) + "..." : text;
                 const first = photos[0] || videos[0];
-                if (first.type === "image") await telegram.sendPhoto(token, chatId, first.url, caption);
-                else await telegram.sendVideo(token, chatId, first.url, caption);
+                const sent = first.type === "image"
+                  ? await telegram.sendPhoto(token, chatId, first.url, caption)
+                  : await telegram.sendVideo(token, chatId, first.url, caption);
+                messageIds.telegram = sent?.message_id || null;
 
                 for (const m of media.filter((x) => x !== first && x.url)) {
                   if (m.type === "image") await telegram.sendPhoto(token, chatId, m.url, "");
@@ -459,8 +486,14 @@ exports.runScheduledPosts = onSchedule(
                 // لو النص أطول من حد الكابشن، نبعت الباقي كرسالة
                 if (text.length > 1024) await telegram.sendMessage(token, chatId, text);
               } else {
-                await telegram.sendMessage(token, chatId, text);
+                const sent = await telegram.sendMessage(token, chatId, text);
+                messageIds.telegram = sent?.message_id || null;
               }
+
+              // عدد المتابعين وقت النشر — أساس تقرير الوصول
+              try { audience.telegram = await telegram.getChatMemberCount(token, chatId); }
+              catch { /* مش مشكلة لو فشل */ }
+
               results[platform] = "sent";
             } else {
               results[platform] = "skipped"; // لسه مش مربوط
@@ -474,7 +507,7 @@ exports.runScheduledPosts = onSchedule(
         const anySent = Object.values(results).includes("sent");
         await postDoc.ref.update({
           status: anySent ? "published" : "failed",
-          results,
+          results, messageIds, audience,
           publishedAt: admin.firestore.FieldValue.serverTimestamp(),
         });
 
@@ -499,7 +532,7 @@ exports.runScheduledPosts = onSchedule(
 //  7) تجميع إحصائيات آخر اليوم (أساس التقارير)
 // ============================================================
 exports.dailyRollup = onSchedule(
-  { schedule: "55 23 * * *", timeZone: "Africa/Cairo" },
+  { schedule: "55 23 * * *", timeZone: "Africa/Cairo", secrets: [TOKEN_ENC_KEY] },
   async () => {
     const today = new Date();
     const dayId = today.toISOString().slice(0, 10);
@@ -508,25 +541,127 @@ exports.dailyRollup = onSchedule(
     const companies = await db.collection("companies").get();
     for (const c of companies.docs) {
       const companyId = c.id;
-      const [convs, orders] = await Promise.all([
-        db.collection(`companies/${companyId}/conversations`).where("lastMessageAt", ">=", from).get(),
-        db.collection(`companies/${companyId}/orders`).where("createdAt", ">=", from).get(),
-      ]);
-
-      const list = convs.docs.map((d) => d.data());
-      await db.doc(`companies/${companyId}/stats/${dayId}`).set({
-        date: dayId,
-        conversations: list.length,
-        aiHandled: list.filter((x) => x.status === "ai_handled").length,
-        needsHuman: list.filter((x) => x.status === "needs_human").length,
-        complaints: list.filter((x) => x.isComplaint).length,
-        orders: orders.size,
-        revenue: orders.docs.reduce((s, o) => s + (Number(o.data().total) || 0), 0),
-        generatedAt: admin.firestore.FieldValue.serverTimestamp(),
-      });
+      try {
+        await rollupCompany(companyId, dayId, from);
+      } catch (e) {
+        logger.error(`rollup failed for ${companyId}`, e);
+      }
     }
     logger.info("dailyRollup done", dayId);
   });
+
+/** تجميع إحصائيات شركة واحدة ليوم واحد */
+async function rollupCompany(companyId, dayId, from) {
+  const [convs, orders, posts] = await Promise.all([
+    db.collection(`companies/${companyId}/conversations`).where("lastMessageAt", ">=", from).get(),
+    db.collection(`companies/${companyId}/orders`).where("createdAt", ">=", from).get(),
+    db.collection(`companies/${companyId}/posts`).where("createdAt", ">=", from).get(),
+  ]);
+
+  const list = convs.docs.map((d) => d.data());
+
+  // متوسط وقت الرد بالدقايق
+  const withResponses = list.filter((x) => x.responseCount > 0);
+  const totalMs = withResponses.reduce((s, x) => s + (x.totalResponseMs || 0), 0);
+  const totalCount = withResponses.reduce((s, x) => s + (x.responseCount || 0), 0);
+  const avgResponseMin = totalCount ? Math.round(totalMs / totalCount / 60000) : 0;
+
+  // مؤشر الرضا: نسبة المحادثات اللي مافيهاش شكوى ومقفولة
+  const resolved = list.filter((x) => x.status === "resolved" || x.status === "ai_handled").length;
+  const complaints = list.filter((x) => x.isComplaint).length;
+  const satisfaction = list.length
+    ? Math.round(((list.length - complaints) / list.length) * 100) : 100;
+
+  // العملاء الفريدين + التوزيع حسب المنصة
+  const byPlatform = {};
+  list.forEach((x) => { byPlatform[x.platform] = (byPlatform[x.platform] || 0) + 1; });
+
+  // المتابعين لكل منصة
+  const followers = await collectFollowers(companyId);
+
+  await db.doc(`companies/${companyId}/stats/${dayId}`).set({
+    date: dayId,
+    conversations: list.length,
+    customers: new Set(list.map((x) => x.externalId).filter(Boolean)).size,
+    aiHandled: list.filter((x) => x.status === "ai_handled").length,
+    needsHuman: list.filter((x) => x.status === "needs_human").length,
+    resolved,
+    complaints,
+    satisfaction,
+    avgResponseMin,
+    aiReplies: list.reduce((s, x) => s + (x.aiReplies || 0), 0),
+    humanReplies: list.reduce((s, x) => s + (x.humanReplies || 0), 0),
+    orders: orders.size,
+    revenue: orders.docs.reduce((s, o) => s + (Number(o.data().total) || 0), 0),
+    posts: posts.size,
+    byPlatform,
+    followers,
+    generatedAt: admin.firestore.FieldValue.serverTimestamp(),
+  }, { merge: true });
+}
+
+/** عدد المتابعين لكل منصة مربوطة */
+async function collectFollowers(companyId) {
+  const followers = {};
+
+  // تليجرام — عدد أعضاء القناة
+  try {
+    const s = await db.doc(`companies/${companyId}/secrets/telegram`).get();
+    if (s.exists && s.data().chatId) {
+      const token = decrypt(s.data().token, TOKEN_ENC_KEY.value());
+      followers.telegram = await telegram.getChatMemberCount(token, s.data().chatId);
+    }
+  } catch (e) { logger.warn(`telegram followers ${companyId}: ${e.message}`); }
+
+  // فيسبوك/انستجرام — هيتضافوا أول ما ميتا توافق على التطبيق
+  return followers;
+}
+
+// ============================================================
+//  8) تحديث عدد المتابعين كل 6 ساعات (عشان الرسم البياني يبقى ناعم)
+// ============================================================
+exports.refreshFollowers = onSchedule(
+  { schedule: "0 */6 * * *", timeZone: "Africa/Cairo", secrets: [TOKEN_ENC_KEY] },
+  async () => {
+    const dayId = new Date().toISOString().slice(0, 10);
+    const companies = await db.collection("companies").get();
+
+    for (const c of companies.docs) {
+      if (c.data().active === false) continue;
+      try {
+        const followers = await collectFollowers(c.id);
+        if (Object.keys(followers).length) {
+          await db.doc(`companies/${c.id}/stats/${dayId}`).set(
+            { date: dayId, followers }, { merge: true });
+        }
+      } catch (e) { logger.warn(`followers ${c.id}: ${e.message}`); }
+    }
+  });
+
+// ============================================================
+//  9) تشغيل التجميع يدوياً (زرار "تحديث" في شاشة الإحصائيات)
+// ============================================================
+exports.runRollupNow = onCall({ secrets: [TOKEN_ENC_KEY] }, async (req) => {
+  const profile = await requireProfile(req.auth);
+  if (level(profile.role) < level("owner"))
+    throw new HttpsError("permission-denied", "مش مسموح لك.");
+
+  const { companyId } = req.data || {};
+  const cid = companyId || profile.companyId;
+  assertCompanyAccess(profile, cid);
+
+  const today = new Date();
+  const dayId = today.toISOString().slice(0, 10);
+  const from = new Date(today); from.setHours(0, 0, 0, 0);
+
+  try {
+    await rollupCompany(cid, dayId, from);
+    return { ok: true, date: dayId };
+  } catch (e) {
+    logger.error("runRollupNow failed", e);
+    throw new HttpsError("internal", "تعذّر تحديث الإحصائيات: " + String(e.message).slice(0, 150));
+  }
+});
 
 // ============================================================
 //  أدوات داخلية

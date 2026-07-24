@@ -31,3 +31,10 @@ exports.setWebhook = (token, url, secretToken) =>
   });
 
 exports.getMe = (token) => call(token, "getMe", {});
+
+/** عدد أعضاء القناة/الجروب — ده اللي بيدينا "المتابعين" */
+exports.getChatMemberCount = (token, chatId) =>
+  call(token, "getChatMemberCount", { chat_id: chatId });
+
+/** بيانات القناة (الاسم، الوصف، الصورة) */
+exports.getChat = (token, chatId) => call(token, "getChat", { chat_id: chatId });

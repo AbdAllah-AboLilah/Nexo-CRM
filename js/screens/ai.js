@@ -3,7 +3,8 @@
 // ============================================================
 import { db, doc, updateDoc, fns, httpsCallable } from "../firebase.js";
 import { session, refreshCompany, atLeast } from "../auth.js";
-import { AI_TONES, DEFAULT_AI } from "../config.js";
+import { AI_TONES, DEFAULT_AI, PLATFORMS } from "../config.js";
+import { buildLinks } from "./settings.js";
 import { el, card, esc, toast, field, toggle } from "../ui.js";
 
 export async function render(root) {
@@ -90,6 +91,54 @@ export async function render(root) {
   personaBox.append(businessType.wrap, extra.wrap);
   root.append(personaBox);
 
+  // ---------- إرفاق الثوابت في ردود الخاص ----------
+  const k = c.constants || {};
+  const dmBox = card("إيه اللي يترفق في ردود الرسائل الخاصة؟");
+  dmBox.append(el("p", { class: "text-muted", style: "margin-bottom:14px",
+    text: "لما البوت يرد على رسالة خاصة، تقدر تخليه يرفق البيانات دي تحت الرد أوتوماتيك. الروابط بتتفلتر ذكياً — مش هيبعت لينك تليجرام لعميل جاي من تليجرام." }));
+
+  const dm = { ...(DEFAULT_AI.dmAttach), ...(ai.dmAttach || {}) };
+  const dmInputs = {};
+  const dmDefs = [
+    { key: "address", label: "العنوان", available: !!k.address, missing: "اكتب العنوان في شاشة الثوابت" },
+    { key: "hours", label: "مواعيد العمل", available: !!k.workingHours, missing: "اكتب المواعيد في شاشة الثوابت" },
+    { key: "phones", label: "أرقام التواصل", available: !!k.phones, missing: "اكتب الأرقام في شاشة الثوابت" },
+    { key: "links", label: "روابط التواصل الذكية", available: !!(k.whatsappNumber || k.telegramChannel || k.instagramUser || k.facebookPage), missing: "اكتب الروابط في شاشة الثوابت" },
+  ];
+
+  const dmGrid = el("div", { class: "grid grid-2" });
+  dmDefs.forEach((d) => {
+    const t = toggle({
+      label: d.label, name: `dm-${d.key}`, checked: !!dm[d.key],
+      disabled: !d.available || !canEdit,
+      hint: d.available ? "" : d.missing,
+    });
+    dmInputs[d.key] = t.input;
+    dmGrid.append(t.row);
+  });
+  dmBox.append(dmGrid);
+
+  const dmPreview = el("div", { class: "ai-insight", style: "margin-top:16px" });
+  dmBox.append(dmPreview);
+  const updateDmPreview = () => {
+    const parts = [];
+    if (dmInputs.address.checked && k.address) parts.push(`📍 ${k.address}`);
+    if (dmInputs.hours.checked && k.workingHours) parts.push(`🕐 ${k.workingHours}`);
+    if (dmInputs.phones.checked && k.phones) parts.push(`📞 ${k.phones}`);
+    if (dmInputs.links.checked) {
+      const links = buildLinks(k);
+      delete links.telegram;   // مثال: العميل جاي من تليجرام
+      const lines = Object.entries(links).map(([p, u]) => `${PLATFORMS[p]?.label || p}: ${u}`);
+      if (lines.length) parts.push(lines.join("\n"));
+    }
+    dmPreview.innerHTML = `<strong>معاينة (عميل جاي من تليجرام)</strong><div style="white-space:pre-wrap;font-size:13px">${
+      esc("أهلاً بيك يا فندم! سعر المنتج 150 جنيه 🌸")}${
+      parts.length ? "\n\n———\n" + esc(parts.join("\n")) : ""}</div>`;
+  };
+  Object.values(dmInputs).forEach((i) => i.addEventListener("change", updateDmPreview));
+  updateDmPreview();
+  root.append(dmBox);
+
   // ---------- قوالب رد التعليقات ----------
   const tplBox = card("قوالب الرد العام على التعليقات");
   tplBox.append(el("p", { class: "text-muted", style: "margin-bottom:14px",
@@ -152,6 +201,7 @@ export async function render(root) {
             businessType: businessType.input.value.trim(),
             extraInstructions: extra.input.value.trim(),
             commentTemplates: templates.map((t) => t.trim()).filter(Boolean),
+            dmAttach: Object.fromEntries(Object.entries(dmInputs).map(([k2, i]) => [k2, i.checked])),
           },
         });
         await refreshCompany();
