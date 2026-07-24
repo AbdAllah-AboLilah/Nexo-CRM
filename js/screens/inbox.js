@@ -29,7 +29,11 @@ const FILTERS = [
   { key: "needs_human", label: "محتاجة رد" },
   { key: "complaint", label: "شكاوى" },
   { key: "ai_handled", label: "رد آلي" },
+  { key: "bot_off", label: "البوت متوقف" },
 ];
+
+let platformTab = "all";   // تاب المنصة المختارة
+let searchTerm = "";
 
 export async function render(root) {
   root.append(el("div", { class: "page-head" }, [
@@ -44,6 +48,18 @@ export async function render(root) {
 
   // ---------- العمود الأيمن: قائمة المحادثات ----------
   const listCol = el("div", { class: "inbox-list" });
+
+  // تابات المنصات (بتظهر حسب المنصات اللي فيها محادثات فعلاً)
+  const platTabs = el("div", { class: "platform-tabs" });
+
+  // شريط البحث
+  const searchWrap = el("div", { class: "inbox-search" }, [
+    el("i", { class: "fas fa-magnifying-glass" }),
+  ]);
+  const searchInput = el("input", { type: "search", placeholder: "ابحث باسم العميل أو بجملة في المحادثة..." });
+  searchInput.addEventListener("input", () => { searchTerm = searchInput.value.trim().toLowerCase(); drawList(); });
+  searchWrap.append(searchInput);
+
   const filters = el("div", { class: "inbox-filters" });
   FILTERS.forEach((f) => {
     const b = el("button", { class: `chip${f.key === filterKey ? " active" : ""}`, text: f.label });
@@ -56,7 +72,8 @@ export async function render(root) {
     filters.append(b);
   });
   listNode = el("div", { class: "chat-items" });
-  listCol.append(filters, listNode);
+  listCol.append(platTabs, searchWrap, filters, listNode);
+  drawPlatformTabs(platTabs);
 
   // ---------- العمود الأيسر: الشات ----------
   const mainCol = el("div", { class: "inbox-main" });
@@ -92,6 +109,8 @@ function subscribe() {
   unsubList = onSnapshot(q, (snap) => {
     trackSnapshot("conversations", snap);
     conversations = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+    const pt = document.querySelector(".platform-tabs");
+    if (pt) drawPlatformTabs(pt);
     drawList();
     if (activeId && !conversations.find((c) => c.id === activeId)) { activeId = null; showEmptyChat(); }
   }, (err) => {
@@ -101,9 +120,53 @@ function subscribe() {
 }
 
 function applyFilter(list) {
-  if (filterKey === "all") return list;
-  if (filterKey === "complaint") return list.filter((c) => c.isComplaint === true);
-  return list.filter((c) => c.status === filterKey);
+  let out = list;
+
+  // تاب المنصة
+  if (platformTab !== "all") out = out.filter((c) => c.platform === platformTab);
+
+  // الفلتر
+  if (filterKey === "complaint") out = out.filter((c) => c.isComplaint === true);
+  else if (filterKey === "bot_off") out = out.filter((c) => c.aiEnabled === false);
+  else if (filterKey !== "all") out = out.filter((c) => c.status === filterKey);
+
+  // البحث بالاسم أو بجملة في آخر رسالة
+  if (searchTerm) {
+    out = out.filter((c) =>
+      String(c.customerName || "").toLowerCase().includes(searchTerm) ||
+      String(c.lastMessage || "").toLowerCase().includes(searchTerm));
+  }
+  return out;
+}
+
+/** تابات المنصات — بتظهر بس للمنصات اللي فيها محادثات */
+function drawPlatformTabs(node) {
+  node.innerHTML = "";
+  const counts = { all: conversations.length };
+  conversations.forEach((c) => { counts[c.platform] = (counts[c.platform] || 0) + 1; });
+
+  const tabs = [{ key: "all", label: "الكل", icon: "fa-layer-group" }];
+  Object.keys(PLATFORMS).forEach((k) => {
+    if (counts[k]) tabs.push({ key: k, label: PLATFORMS[k].label, icon: PLATFORMS[k].icon, color: PLATFORMS[k].color });
+  });
+
+  // لو المنصة المختارة مبقاش فيها محادثات، نرجع للكل
+  if (platformTab !== "all" && !counts[platformTab]) platformTab = "all";
+
+  tabs.forEach((t) => {
+    const b = el("button", { class: `ptab${t.key === platformTab ? " active" : ""}` }, [
+      el("i", { class: `${t.icon.startsWith("fab") ? t.icon : "fas " + t.icon}`, style: t.color ? `color:${t.color}` : "" }),
+      el("span", { text: t.label }),
+      el("span", { class: "ptab-count", text: String(counts[t.key] || 0) }),
+    ]);
+    b.addEventListener("click", () => {
+      platformTab = t.key;
+      node.querySelectorAll(".ptab").forEach((x) => x.classList.remove("active"));
+      b.classList.add("active");
+      drawList();
+    });
+    node.append(b);
+  });
 }
 
 function drawList() {
@@ -316,4 +379,5 @@ export function destroy() {
   unsubList?.(); unsubMsgs?.();
   unsubList = unsubMsgs = null;
   conversations = []; activeId = null; filterKey = "all";
+  platformTab = "all"; searchTerm = "";
 }

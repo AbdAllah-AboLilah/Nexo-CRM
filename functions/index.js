@@ -10,7 +10,7 @@ const { setGlobalOptions, logger } = require("firebase-functions/v2");
 const admin = require("firebase-admin");
 
 const { encrypt, decrypt, verifyMetaSignature } = require("./lib/crypto");
-const { generateReply, assistPost, helpAnswer, ping, ASSIST_TASKS } = require("./lib/ai");
+const { generateReply, assistPost, helpAnswer, generateTemplates, ping, ASSIST_TASKS } = require("./lib/ai");
 const { buildKnowledgeText } = require("./lib/kb");
 const { notify, usersOf, usersAtLeast, superAdmins } = require("./lib/notify");
 const telegram = require("./lib/telegram");
@@ -62,9 +62,13 @@ async function audit(companyId, action, actor, details = {}) {
 // ============================================================
 //  1) إدارة المستخدمين
 // ============================================================
+const ALLOWED_EXTRA = ["publisher", "products", "orders", "ai", "analytics"];
+
 exports.createUser = onCall(async (req) => {
   const profile = await requireProfile(req.auth);
   const { name, email, password, role, companyId } = req.data || {};
+  const extraScreens = (Array.isArray(req.data?.extraScreens) ? req.data.extraScreens : [])
+    .filter((s) => ALLOWED_EXTRA.includes(s));
 
   if (level(profile.role) < level("owner"))
     throw new HttpsError("permission-denied", "مش مسموح لك تضيف مستخدمين.");
@@ -95,6 +99,7 @@ exports.createUser = onCall(async (req) => {
 
   await db.doc(`users/${userRecord.uid}`).set({
     name, email, role, companyId, active: true,
+    extraScreens: role === "agent" ? extraScreens : [],
     createdAt: admin.firestore.FieldValue.serverTimestamp(),
     createdBy: profile.uid,
   });
@@ -123,6 +128,11 @@ exports.updateUser = onCall(async (req) => {
     if (profile.role !== "superadmin" && level(role) >= level(profile.role))
       throw new HttpsError("permission-denied", "صلاحية أعلى من المسموح.");
     updates.role = role;
+  }
+  if (Array.isArray(req.data?.extraScreens)) {
+    const effectiveRole = role || target.role;
+    updates.extraScreens = effectiveRole === "agent"
+      ? req.data.extraScreens.filter((s) => ALLOWED_EXTRA.includes(s)) : [];
   }
   if (Object.keys(updates).length) await db.doc(`users/${uid}`).update(updates);
   if (password) {
@@ -1034,4 +1044,40 @@ exports.onIntegrationChanged = onDocumentUpdated("companies/{companyId}", async 
     body: `${after.name || event.params.companyId} عدّلت ربط منصاتها`,
     meta: { companyId: event.params.companyId },
   });
+});
+
+// ============================================================
+//  توليد قوالب الرد على التعليقات بالذكاء الاصطناعي
+// ============================================================
+exports.generateTemplates = onCall(async (req) => {
+  const profile = await requireProfile(req.auth);
+  const { companyId, extraHint } = req.data || {};
+
+  if (level(profile.role) < level("manager"))
+    throw new HttpsError("permission-denied", "مش مسموح لك.");
+  const cid = companyId || profile.companyId;
+  assertCompanyAccess(profile, cid);
+
+  const snap = await db.doc(`companies/${cid}`).get();
+  if (!snap.exists) throw new HttpsError("not-found", "الشركة مش موجودة.");
+  const company = snap.data();
+
+  if (company.features?.canUseAI === false)
+    throw new HttpsError("permission-denied", "ميزة الذكاء الاصطناعي مقفولة للشركة دي.");
+  if (extraHint && String(extraHint).length > 300)
+    throw new HttpsError("invalid-argument", "التوجيه طويل جداً.");
+
+  try {
+    const templates = await generateTemplates({
+      companyName: company.name,
+      businessType: company.ai?.businessType || company.businessType || "",
+      tone: company.ai?.tone || "egyptian",
+      extraHint: String(extraHint || "").slice(0, 300),
+    });
+    if (!templates.length) throw new Error("مرجعش قوالب");
+    return { ok: true, templates };
+  } catch (e) {
+    logger.error("generateTemplates failed", e);
+    throw new HttpsError("internal", "تعذّر توليد القوالب. جرّب تاني.");
+  }
 });

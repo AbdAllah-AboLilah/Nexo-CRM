@@ -62,11 +62,12 @@ export function buildNav() {
 export async function go(id, updateHash = true) {
   const item = NAV.find((n) => n.id === id);
 
-  // لو الشاشة مش موجودة أو ممنوعة → الرئيسية
+  // لو الشاشة مش موجودة أو ممنوعة → أول شاشة مسموحة
   if (!item || !canSee(item)) {
-    if (id !== "dashboard") return go("dashboard");
+    const firstAllowed = NAV.find(canSee) || NAV[0];
+    if (id !== firstAllowed.id) return go(firstAllowed.id);
   }
-  const target = item && canSee(item) ? item : NAV[0];
+  const target = item && canSee(item) ? item : (NAV.find(canSee) || NAV[0]);
 
   if (updateHash && !location.hash.startsWith(`#/${target.id}`)) {
     location.hash = `#/${target.id}`;

@@ -109,6 +109,24 @@ export function field({ label, name, value = "", type = "text", placeholder = ""
   return { wrap, input };
 }
 
+/** حقل كلمة مرور مع زرار إظهار/إخفاء */
+export function passwordField({ label, name, placeholder = "••••••••", hint = "" }) {
+  const wrap = el("div", { class: "field" });
+  if (label) wrap.append(el("label", { text: label, for: name }));
+  const box = el("div", { class: "pwd-wrap" });
+  const input = el("input", { class: "form-control", id: name, name, type: "password", placeholder, autocomplete: "new-password" });
+  const eye = el("button", { type: "button", class: "pwd-eye", html: '<i class="fas fa-eye"></i>', "aria-label": "إظهار" });
+  eye.addEventListener("click", () => {
+    const show = input.type === "password";
+    input.type = show ? "text" : "password";
+    eye.innerHTML = `<i class="fas fa-eye${show ? "-slash" : ""}"></i>`;
+  });
+  box.append(input, eye);
+  wrap.append(box);
+  if (hint) wrap.append(el("small", { class: "hint", text: hint }));
+  return { wrap, input };
+}
+
 export function toggle({ label, name, checked = false, hint = "", disabled = false, onChange }) {
   const input = el("input", { type: "checkbox", id: name, name });
   input.checked = !!checked;

@@ -203,6 +203,43 @@ async function helpAnswer({ question, knowledge, companyName, roleLabel }) {
   }
 }
 
+/** توليد قوالب رد على التعليقات حسب نشاط الشركة ونبرتها */
+async function generateTemplates({ companyName, businessType, tone, extraHint }) {
+  const ai = client();
+  const toneText = TONE_TEXT[tone] || TONE_TEXT.egyptian;
+
+  const instruction = [
+    `أنت خبير تسويق بتكتب ردود قصيرة لصفحة "${companyName || ""}".`,
+    businessType ? `نشاط الشركة: ${businessType}.` : "",
+    `الأسلوب المطلوب: ${toneText}`,
+    "",
+    "المطلوب: اكتب 8 جمل قصيرة (سطر واحد لكل جملة) يرد بيها البوت علناً على تعليق العميل اللي بيسأل عن السعر،",
+    "بحيث يقوله إن السعر اتبعت في الرسائل الخاصة، بأسلوب متنوّع وجذّاب يناسب نشاط الشركة.",
+    "كل جملة مختلفة عن التانية، ومناسبة للنشاط ده تحديداً.",
+    extraHint ? `توجيه إضافي من صاحب الشركة: ${extraHint}` : "",
+    "",
+    "رجّع JSON بالشكل ده فقط: {\"templates\":[\"جملة\",\"جملة\",...]}",
+  ].filter(Boolean).join("\n");
+
+  const res = await ai.models.generateContent({
+    model: "gemini-2.5-flash",
+    contents: "ولّد القوالب دلوقتي.",
+    config: {
+      systemInstruction: instruction,
+      responseMimeType: "application/json",
+      temperature: 1.0,
+      thinkingConfig: { thinkingBudget: 0 },
+    },
+  });
+
+  try {
+    const parsed = JSON.parse((res.text || "").trim());
+    return (parsed.templates || []).map((t) => String(t).trim()).filter(Boolean).slice(0, 12);
+  } catch {
+    return [];
+  }
+}
+
 /** اختبار سريع للتأكد إن الاتصال بـ Gemini شغال */
 async function ping() {
   const ai = client();
@@ -214,6 +251,6 @@ async function ping() {
 }
 
 module.exports = {
-  buildSystemPrompt, generateReply, assistPost, helpAnswer, ping,
+  buildSystemPrompt, generateReply, assistPost, helpAnswer, generateTemplates, ping,
   TONE_TEXT, ASSIST_TASKS, client,
 };

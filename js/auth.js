@@ -38,7 +38,11 @@ export function hasFeature(key) {
 /** هل المستخدم يقدر يشوف عنصر القائمة ده؟ */
 export function canSee(navItem) {
   if (!session.profile) return false;
-  if (!navItem.roles.includes(session.profile.role)) return false;
+  const byRole = navItem.roles.includes(session.profile.role);
+  // صلاحيات إضافية: صاحب المكان ممكن يفتح للموظف شاشات فوق دوره
+  const byExtra = Array.isArray(session.profile.extraScreens)
+    && session.profile.extraScreens.includes(navItem.id);
+  if (!byRole && !byExtra) return false;
   if (navItem.feature && !hasFeature(navItem.feature)) return false;
   return true;
 }

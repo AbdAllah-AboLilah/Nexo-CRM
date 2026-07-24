@@ -433,6 +433,27 @@ table.data tbody tr:hover { background: #fafbfe; }
   background: #fff; border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden;
 }
 .inbox-list { width: 320px; flex-shrink: 0; border-inline-end: 1px solid var(--line); display: flex; flex-direction: column; }
+.platform-tabs { display: flex; gap: 2px; padding: 8px 8px 0; border-bottom: 1px solid var(--line); overflow-x: auto; }
+.platform-tabs .ptab {
+  display: flex; align-items: center; gap: 6px; padding: 8px 11px; border: 0;
+  background: none; border-bottom: 2px solid transparent; margin-bottom: -1px;
+  font-size: 12.5px; font-weight: 700; color: var(--muted); cursor: pointer; white-space: nowrap;
+}
+.platform-tabs .ptab.active { color: var(--primary); border-bottom-color: var(--primary); }
+.platform-tabs .ptab-count {
+  background: #eef0f6; color: var(--muted); border-radius: 10px;
+  padding: 1px 7px; font-size: 11px; min-width: 18px; text-align: center;
+}
+.platform-tabs .ptab.active .ptab-count { background: var(--primary-soft); color: var(--primary-dark); }
+
+.inbox-search { position: relative; padding: 10px 12px 0; }
+.inbox-search i { position: absolute; inset-inline-start: 22px; top: 50%; transform: translateY(-50%); color: #b5b9c9; font-size: 13px; }
+.inbox-search input {
+  width: 100%; padding: 9px 12px 9px 34px; border: 1.5px solid var(--line); border-radius: 9px;
+  font-size: 13px; background: #fafbfd;
+}
+.inbox-search input:focus { outline: none; border-color: var(--primary); background: #fff; }
+
 .inbox-filters { padding: 12px; border-bottom: 1px solid var(--line); display: flex; gap: 6px; flex-wrap: wrap; }
 .chip {
   padding: 5px 12px; border-radius: 16px; background: #f1f3f8; color: var(--muted);
@@ -510,6 +531,16 @@ table.data tbody tr:hover { background: #fafbfe; }
 }
 .file-drop:hover, .file-drop.over { border-color: var(--primary); background: var(--primary-soft); }
 .file-drop i { font-size: 32px; color: #c5cbdd; display: block; margin-bottom: 10px; }
+
+/* ---------- حقل كلمة المرور بعين ---------- */
+.pwd-wrap { position: relative; }
+.pwd-wrap .form-control { padding-inline-end: 42px; }
+.pwd-eye {
+  position: absolute; inset-inline-end: 8px; top: 50%; transform: translateY(-50%);
+  width: 30px; height: 30px; border: 0; background: none; color: #b5b9c9;
+  cursor: pointer; font-size: 14px; border-radius: 8px;
+}
+.pwd-eye:hover { color: var(--primary); background: #f1f3f8; }
 
 /* ---------- المسودات والحفظ التلقائي ---------- */
 .draft-bar {

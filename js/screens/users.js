@@ -8,7 +8,7 @@ import {
 } from "../firebase.js";
 import { session, isSuper, atLeast } from "../auth.js";
 import { ROLES, ROLE_ORDER, normalizeLogin, displayLogin, USER_DOMAIN } from "../config.js";
-import { el, card, esc, toast, modal, confirmBox, field, spinner, emptyState, fmtDate } from "../ui.js";
+import { el, card, esc, toast, modal, confirmBox, field, passwordField, spinner, emptyState, fmtDate } from "../ui.js";
 
 let users = [];
 
@@ -150,12 +150,46 @@ function userForm(existing = null) {
   email.input.addEventListener("input", updatePreview);
   updatePreview();
   if (existing) email.input.disabled = true;
-  const pass = field({ label: existing ? "كلمة مرور جديدة (سيبها فاضية لو مش هتغيرها)" : "كلمة المرور *",
-    name: "password", type: "password", hint: "6 حروف على الأقل" });
+  const pass = passwordField({ label: existing ? "كلمة مرور جديدة (سيبها فاضية لو مش هتغيرها)" : "كلمة المرور *",
+    name: "password", hint: "6 حروف على الأقل" });
+  const pass2 = passwordField({ label: "تأكيد كلمة المرور", name: "password2" });
   const role = field({ label: "الصلاحية *", name: "role", type: "select", value: existing?.role || "agent",
     options: availableRoles().map((r) => ({ value: r, label: ROLES[r].label })) });
 
-  const body = el("div", {}, [name.wrap, email.wrap, pass.wrap, role.wrap]);
+  // ---------- صلاحيات إضافية (يفتح للموظف شاشات فوق دوره) ----------
+  const extraWrap = el("div", { style: "margin-top:6px" });
+  const extraInputs = {};
+  const EXTRA_SCREENS = [
+    { id: "publisher", label: "الناشر الذكي", minRole: "manager" },
+    { id: "products", label: "المخزون والأصناف", minRole: "manager" },
+    { id: "orders", label: "الطلبات والمبيعات", minRole: "manager" },
+    { id: "ai", label: "إعدادات الرد الآلي", minRole: "manager" },
+    { id: "analytics", label: "التحليلات والتقارير", minRole: "owner" },
+  ];
+
+  function drawExtras() {
+    extraWrap.innerHTML = "";
+    // الصلاحيات الإضافية تنفع للموظف بس (اللي دوره أقل)
+    if (role.input.value !== "agent") return;
+    extraWrap.append(el("label", { class: "field", style: "margin-bottom:8px",
+      text: "شاشات إضافية للموظف (فوق صندوق الرسائل)" }));
+    const grid = el("div", { class: "grid grid-2" });
+    const current = existing?.extraScreens || [];
+    EXTRA_SCREENS.forEach((s) => {
+      const input = el("input", { type: "checkbox" });
+      input.checked = current.includes(s.id);
+      const r = el("label", { class: `check-row${input.checked ? " checked" : ""}` }, [input, el("span", { text: s.label })]);
+      input.addEventListener("change", () => r.classList.toggle("checked", input.checked));
+      extraInputs[s.id] = input;
+      grid.append(r);
+    });
+    extraWrap.append(grid);
+    extraWrap.append(el("small", { class: "hint", text: "الموظف هيشوف الشاشات دي زيادة على صندوق الرسائل." }));
+  }
+  role.input.addEventListener("change", () => { Object.keys(extraInputs).forEach((k) => delete extraInputs[k]); drawExtras(); });
+  drawExtras();
+
+  const body = el("div", {}, [name.wrap, email.wrap, pass.wrap, pass2.wrap, role.wrap, extraWrap]);
   if (!existing) {
     body.append(el("p", { class: "hint",
       text: "الحساب بيتعمل على السيرفر مباشرة. اكتب البيانات وسلّمها للموظف — النظام مش بيسجّل ولا بيطلب كلمة سر فيسبوك من حد." }));
@@ -169,11 +203,15 @@ function userForm(existing = null) {
       {
         label: "حفظ", class: "btn-primary",
         onClick: async ({ close, button }) => {
+          const extraScreens = role.input.value === "agent"
+            ? Object.entries(extraInputs).filter(([, i]) => i.checked).map(([id]) => id)
+            : [];
           const payload = {
             name: name.input.value.trim(),
             email: normalizeLogin(email.input.value),   // ← بيكمّل الاسم لوحده
             password: pass.input.value,
             role: role.input.value,
+            extraScreens,
             companyId: session.companyId,
             uid: existing?.id || null,
           };
@@ -182,6 +220,8 @@ function userForm(existing = null) {
           if (!isEmail(payload.email))
             return toast("اسم المستخدم فيه رموز مش مسموحة — استخدم حروف وأرقام بس", "error");
           if (!existing && payload.password.length < 6) return toast("كلمة المرور لازم 6 حروف على الأقل", "error");
+          if (pass.input.value && pass.input.value !== pass2.input.value)
+            return toast("كلمة المرور والتأكيد مش متطابقين", "error");
 
           button.disabled = true;
           try {

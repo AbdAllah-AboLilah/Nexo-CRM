@@ -161,10 +161,72 @@ export async function render(root) {
   }
   drawTemplates();
   tplBox.append(tplWrap);
+
   if (canEdit) {
     const add = el("button", { class: "btn btn-ghost btn-sm", html: '<i class="fas fa-plus"></i> إضافة جملة' });
     add.addEventListener("click", () => { templates.push(""); drawTemplates(); });
     tplBox.append(add);
+
+    // ---------- توليد القوالب بالذكاء الاصطناعي ----------
+    const genWrap = el("div", { style: "margin-top:20px;padding-top:18px;border-top:1px dashed var(--line)" });
+    genWrap.append(el("div", { style: "display:flex;align-items:center;gap:8px;margin-bottom:10px" }, [
+      el("i", { class: "fas fa-wand-magic-sparkles", style: "color:var(--primary)" }),
+      el("strong", { style: "font-size:14px", text: "ولّد قوالب مناسبة لنشاطك" }),
+    ]));
+    genWrap.append(el("p", { class: "hint", style: "margin-bottom:10px",
+      text: "النظام هيقترح قوالب حسب نشاط الشركة ونبرتها. علّم على اللي عاجبك وأضفه، وتقدر تعدّل فيه بعدين." }));
+
+    const hint = field({ name: "genHint", placeholder: "توجيه إضافي (اختياري) — مثلاً: خلّيها رسمية شوية، أو ركّز على التوصيل السريع" });
+    genWrap.append(hint.wrap);
+
+    const genBtn = el("button", { class: "btn btn-primary btn-sm", html: '<i class="fas fa-bolt"></i> ولّد اقتراحات' });
+    const suggBox = el("div", { style: "margin-top:14px" });
+    genWrap.append(genBtn, suggBox);
+
+    genBtn.addEventListener("click", async () => {
+      genBtn.disabled = true;
+      genBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> جاري التوليد...';
+      suggBox.innerHTML = "";
+      try {
+        const res = await httpsCallable(fns, "generateTemplates")({
+          companyId: session.companyId,
+          extraHint: hint.input.value.trim(),
+        });
+        const list = res.data?.templates || [];
+        if (!list.length) throw new Error("مرجعش قوالب");
+
+        suggBox.append(el("p", { class: "text-muted", style: "font-size:12.5px;margin-bottom:8px",
+          text: "علّم على اللي عايز تضيفه:" }));
+
+        const picks = new Set();
+        list.forEach((t) => {
+          const cb = el("input", { type: "checkbox" });
+          const row = el("label", { class: "check-row", style: "margin-bottom:7px" }, [cb, el("span", { text: t })]);
+          cb.addEventListener("change", () => {
+            row.classList.toggle("checked", cb.checked);
+            cb.checked ? picks.add(t) : picks.delete(t);
+          });
+          suggBox.append(row);
+        });
+
+        const addSel = el("button", { class: "btn btn-success btn-sm", style: "margin-top:6px",
+          html: '<i class="fas fa-plus"></i> أضف المختار' });
+        addSel.addEventListener("click", () => {
+          if (!picks.size) return toast("علّم على قالب واحد على الأقل", "warn");
+          picks.forEach((t) => { if (!templates.includes(t)) templates.push(t); });
+          drawTemplates();
+          toast(`تمت إضافة ${picks.size} قالب`, "success");
+          suggBox.innerHTML = "";
+        });
+        suggBox.append(addSel);
+      } catch (e) {
+        toast("فشل التوليد: " + (e.message || ""), "error");
+      }
+      genBtn.disabled = false;
+      genBtn.innerHTML = '<i class="fas fa-bolt"></i> ولّد اقتراحات تانية';
+    });
+
+    tplBox.append(genWrap);
   }
   root.append(tplBox);
 

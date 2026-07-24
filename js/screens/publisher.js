@@ -32,6 +32,15 @@ let state = {
 export async function render(root) {
   const c = session.company;
 
+  // نرجّع اختيارات آخر بوست (المنصات والثوابت) لو مفيش مسودة شغالة
+  try {
+    const prefs = JSON.parse(localStorage.getItem(`nexo.pubPrefs.${session.companyId}`) || "null");
+    if (prefs && !state.caption) {
+      Object.assign(state.platforms, prefs.platforms || {});
+      Object.assign(state.attach, prefs.attach || {});
+    }
+  } catch { /* تجاهل */ }
+
   root.append(el("div", { class: "page-head" }, [
     el("div", {}, [
       el("h2", { text: "الناشر الذكي" }),
@@ -251,7 +260,8 @@ export async function render(root) {
     const allowed = hasFeature(p.feature);
     const input = el("input", { type: "checkbox" });
     input.disabled = !allowed;
-    const row = el("label", { class: "check-row" }, [
+    input.checked = allowed && !!state.platforms[key];   // نرجّع اختيار آخر بوست
+    const row = el("label", { class: `check-row${input.checked ? " checked" : ""}` }, [
       input,
       el("i", { class: p.icon, style: `color:${allowed ? p.color : "#c5cbdd"}` }),
       el("span", { text: p.label }),
@@ -282,7 +292,8 @@ export async function render(root) {
   attachDefs.forEach((a) => {
     const input = el("input", { type: "checkbox" });
     input.disabled = !a.available;
-    const row = el("label", { class: "check-row" }, [input, el("span", { text: a.label })]);
+    input.checked = a.available && !!state.attach[a.key];   // نرجّع اختيار آخر بوست
+    const row = el("label", { class: `check-row${input.checked ? " checked" : ""}` }, [input, el("span", { text: a.label })]);
     if (!a.available) row.title = "اكتب البيانات دي الأول في شاشة الثوابت";
     input.addEventListener("change", () => {
       state.attach[a.key] = input.checked;
@@ -476,6 +487,13 @@ async function submit(status) {
       createdBy: session.user.uid,
       createdByName: session.profile.name || "",
     });
+    // نفتكر اختيارات المنصات والثوابت للبوست الجاي
+    try {
+      localStorage.setItem(`nexo.pubPrefs.${session.companyId}`, JSON.stringify({
+        platforms: state.platforms, attach: state.attach,
+      }));
+    } catch { /* تجاهل */ }
+
     draft?.clear();   // اتحفظ في السحابة خلاص، مش محتاجين المسودة المحلية
     toast(status === "draft" ? "تم الحفظ كمسودة" : "تم إضافة البوست لقائمة النشر", "success");
     import("../router.js").then((r) => r.reloadCurrent());
@@ -509,6 +527,16 @@ async function loadPosts(box) {
         item.append(rep);
       }
 
+      // تعديل: المسودات والمجدولة يتعدّلوا بالكامل؛ المنشور يتعدّل سعره بس
+      const editBtn = el("button", { class: "btn btn-light btn-sm",
+        html: `<i class="fas ${p.status === "published" ? "fa-tag" : "fa-pen"}"></i>`,
+        title: p.status === "published" ? "تعديل السعر" : "تعديل البوست" });
+      editBtn.addEventListener("click", () => {
+        if (p.status === "published") editPrice(p);
+        else editPost(p);
+      });
+      item.append(editBtn);
+
       const del = el("button", { class: "btn btn-light btn-sm", html: '<i class="fas fa-trash"></i>' });
       del.addEventListener("click", async () => {
         if (!(await confirmBox("هتمسح البوست ده؟", { title: "حذف بوست" }))) return;
@@ -523,6 +551,86 @@ async function loadPosts(box) {
     box.innerHTML = "";
     box.append(el("p", { class: "text-muted", text: "تعذّر تحميل البوستات: " + e.message }));
   }
+}
+
+/** تعديل السعر بس (للبوست المنشور — النص اتنشر خلاص) */
+function editPrice(p) {
+  const productName = field({ label: "اسم المنتج", name: "pn", value: p.productName || "" });
+  const price = field({ label: "السعر", name: "pr", type: "number", value: p.price || "" });
+  const body = el("div", {}, [
+    el("p", { class: "hint", style: "margin-bottom:12px",
+      text: "البوست اتنشر خلاص، فالنص مش هيتغير على المنصات. بس السعر ده اللي البوت بيرد بيه على تعليقات البوست، فتقدر تحدّثه." }),
+    productName.wrap, price.wrap,
+  ]);
+  modal({
+    title: "تعديل سعر البوست", body,
+    actions: [
+      { label: "إلغاء", class: "btn-light", onClick: ({ close }) => close() },
+      { label: "حفظ", class: "btn-primary", onClick: async ({ close, button }) => {
+        button.disabled = true;
+        try {
+          await updateDoc(doc(db, ...tenantPath("posts"), p.id), {
+            productName: productName.input.value.trim(),
+            price: Number(price.input.value) || 0,
+          });
+          toast("تم تحديث السعر", "success");
+          close();
+          import("../router.js").then((r) => r.reloadCurrent());
+        } catch (e) { button.disabled = false; toast("فشل الحفظ: " + e.message, "error"); }
+      } },
+    ],
+  });
+}
+
+/** تعديل بوست كامل (مسودة أو مجدول لسه ماتنشرش) */
+function editPost(p) {
+  const caption = el("textarea", { class: "form-control", rows: 5, value: p.caption || "" });
+  const productName = field({ label: "المنتج", name: "pn", value: p.productName || "" });
+  const price = field({ label: "السعر", name: "pr", type: "number", value: p.price || "" });
+
+  const platBox = el("div", { class: "grid grid-4", style: "margin:12px 0" });
+  const platInputs = {};
+  Object.entries(PLATFORMS).forEach(([key, plat]) => {
+    const allowed = hasFeature(plat.feature);
+    const input = el("input", { type: "checkbox" });
+    input.disabled = !allowed;
+    input.checked = (p.platforms || []).includes(key);
+    const row = el("label", { class: `check-row${input.checked ? " checked" : ""}` }, [
+      input, el("i", { class: plat.icon, style: `color:${allowed ? plat.color : "#c5cbdd"}` }), el("span", { text: plat.label }),
+    ]);
+    input.addEventListener("change", () => row.classList.toggle("checked", input.checked));
+    platInputs[key] = input;
+    platBox.append(row);
+  });
+
+  const body = el("div", {}, [
+    el("label", { class: "field", text: "نص البوست" }), caption,
+    el("div", { class: "form-row" }, [productName.wrap, price.wrap]),
+    el("label", { class: "field", style: "margin-top:8px", text: "المنصات" }), platBox,
+  ]);
+
+  modal({
+    title: "تعديل البوست", body, width: 600,
+    actions: [
+      { label: "إلغاء", class: "btn-light", onClick: ({ close }) => close() },
+      { label: "حفظ", class: "btn-primary", onClick: async ({ close, button }) => {
+        const platforms = Object.entries(platInputs).filter(([, i]) => i.checked).map(([k]) => k);
+        if (!caption.value.trim()) return toast("اكتب نص البوست", "error");
+        button.disabled = true;
+        try {
+          await updateDoc(doc(db, ...tenantPath("posts"), p.id), {
+            caption: caption.value.trim(),
+            productName: productName.input.value.trim(),
+            price: Number(price.input.value) || 0,
+            platforms,
+          });
+          toast("تم حفظ التعديلات", "success");
+          close();
+          import("../router.js").then((r) => r.reloadCurrent());
+        } catch (e) { button.disabled = false; toast("فشل الحفظ: " + e.message, "error"); }
+      } },
+    ],
+  });
 }
 
 /** تقرير مفصّل عن بوست منشور */
