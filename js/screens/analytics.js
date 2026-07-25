@@ -6,8 +6,10 @@ import { db, collection, getDocs, query, where, orderBy, limit } from "../fireba
 import { session, tenantPath, hasFeature } from "../auth.js";
 import { PLATFORMS } from "../config.js";
 import { el, card, esc, money, spinner, toast, weekStart, fmtDate, emptyState } from "../ui.js";
+import { openReport } from "../report.js";
 
 let period = "daily";
+let lastData = null;   // آخر بيانات محسوبة — بيستخدمها التقرير
 
 const PERIODS = {
   daily:   { label: "يومي",   compare: "بالأمس" },
@@ -34,7 +36,7 @@ export async function render(root) {
         return b;
       })),
       hasFeature("canUseReports")
-        ? mkBtn("تحميل PDF", "btn-ghost", "fa-file-pdf", () => window.print())
+        ? mkBtn("تقرير للطباعة", "btn-ghost", "fa-file-pdf", printReport)
         : null,
     ].filter(Boolean)),
   ]));
@@ -108,6 +110,8 @@ async function load(body) {
         "أول ما المحادثات والطلبات تبدأ تنزل، هتلاقي هنا مقارنات ونصايح ذكية."));
       return;
     }
+
+    lastData = { cur, prev, curFrom };   // للتقرير المطبوع
 
     body.append(statsGrid(cur, prev));
     body.append(chartCard(cur, prev));
@@ -254,10 +258,82 @@ function insightCard(cur, prev) {
   return box;
 }
 
+// ---------- تقرير مستقل للطباعة ----------
+function printReport() {
+  if (!lastData) return toast("استنى لحد ما البيانات تتحمّل", "warn");
+  const { cur, prev, curFrom } = lastData;
+
+  const aiCount = (l) => l.filter((c) => c.status === "ai_handled").length;
+  const humanCount = (l) => l.filter((c) => ["in_progress", "resolved", "needs_human"].includes(c.status)).length;
+  const complaints = (l) => l.filter((c) => c.isComplaint).length;
+  const revenue = (l) => l.reduce((s, o) => s + (Number(o.total) || 0), 0);
+  const customers = (l) => new Set(l.map((c) => c.externalId).filter(Boolean)).size;
+
+  const metrics = [
+    { label: "إجمالي المحادثات", now: cur.convs.length, before: prev.convs.length },
+    { label: "العملاء", now: customers(cur.convs), before: customers(prev.convs) },
+    { label: "رد آلي بالذكاء الاصطناعي", now: aiCount(cur.convs), before: aiCount(prev.convs) },
+    { label: "محتاجة تدخل بشري", now: humanCount(cur.convs), before: humanCount(prev.convs), goodDown: true },
+    { label: "الشكاوى", now: complaints(cur.convs), before: complaints(prev.convs), goodDown: true },
+    { label: "الطلبات", now: cur.orders.length, before: prev.orders.length },
+    { label: "قيمة الطلبات", now: revenue(cur.orders), before: revenue(prev.orders), money: true },
+  ];
+
+  // التوزيع حسب المنصة
+  const counts = {};
+  cur.convs.forEach((c) => { counts[c.platform] = (counts[c.platform] || 0) + 1; });
+  const total = cur.convs.length || 1;
+  const platforms = {};
+  Object.entries(counts).sort((a, b) => b[1] - a[1]).forEach(([k, n]) => {
+    platforms[k] = { label: PLATFORMS[k]?.label || k, count: n, pct: Math.round((n / total) * 100) };
+  });
+
+  // الحركة اليومية
+  const byDay = {};
+  cur.convs.forEach((c) => {
+    const d = c.lastMessageAt?.toDate ? c.lastMessageAt.toDate() : new Date(c.lastMessageAt);
+    if (isNaN(d)) return;
+    const key = d.toISOString().slice(0, 10);
+    byDay[key] = (byDay[key] || 0) + 1;
+  });
+  const daily = Object.entries(byDay).sort().map(([date, n]) => ({ date, conversations: n }));
+
+  // نفس منطق القراءة اللي في الشاشة
+  const insights = [];
+  const diff = prev.convs.length === 0 ? 0
+    : Math.round(((cur.convs.length - prev.convs.length) / prev.convs.length) * 100);
+  const pending = cur.convs.filter((c) => c.status === "needs_human").length;
+  const compl = complaints(cur.convs);
+
+  if (diff <= -25) insights.push({ title: "التفاعل نازل",
+    body: `المحادثات نزلت ${Math.abs(diff)}% مقارنة ${PERIODS[period].compare}.` });
+  else if (diff >= 25) insights.push({ title: "التفاعل طالع",
+    body: `المحادثات زادت ${diff}% مقارنة ${PERIODS[period].compare}.` });
+
+  if (aiCount(cur.convs) > 0) {
+    const t = aiCount(cur.convs) + humanCount(cur.convs);
+    insights.push({ title: "الرد الآلي وفّر شغل",
+      body: `النظام رد لوحده على ${aiCount(cur.convs)} محادثة — يعني ${t ? Math.round((aiCount(cur.convs) / t) * 100) : 0}% من الشغل اتعمل من غير موظف.` });
+  }
+  if (pending > 0) insights.push({ title: "رسائل مستنية رد",
+    body: `فيه ${pending} محادثة محتاجة رد يدوي.` });
+  if (compl > 0) insights.push({ title: "شكاوى مفتوحة",
+    body: `${compl} شكوى في الفترة دي محتاجة متابعة.` });
+  if (!insights.length) insights.push({ title: "الوضع مستقر",
+    body: "الأرقام في المعدل الطبيعي، مفيش حاجة محتاجة تدخل عاجل." });
+
+  openReport({
+    period,
+    rangeLabel: `من ${fmtDate(curFrom)} — تقرير ${PERIODS[period].label}`,
+    metrics, platforms, daily, insights,
+    followers: [],
+  });
+}
+
 function mkBtn(label, cls, icon, onClick) {
   const b = el("button", { class: `btn ${cls}` }, [icon ? el("i", { class: `fas ${icon}` }) : null, label || null]);
   b.addEventListener("click", onClick);
   return b;
 }
 
-export function destroy() { period = "daily"; }
+export function destroy() { period = "daily"; lastData = null; }

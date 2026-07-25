@@ -3,7 +3,7 @@
 //  المفاتيح كلها في Firebase Secrets، مفيش أي مفتاح مكتوب في الكود
 // ============================================================
 const { onRequest, onCall, HttpsError } = require("firebase-functions/v2/https");
-const { onDocumentCreated, onDocumentUpdated } = require("firebase-functions/v2/firestore");
+const { onDocumentCreated, onDocumentUpdated, onDocumentDeleted } = require("firebase-functions/v2/firestore");
 const { onSchedule } = require("firebase-functions/v2/scheduler");
 const { defineSecret } = require("firebase-functions/params");
 const { setGlobalOptions, logger } = require("firebase-functions/v2");
@@ -290,11 +290,20 @@ exports.telegramWebhook = onRequest(
         return;
       }
 
-      const msg = req.body?.message || req.body?.channel_post;
-      if (!msg?.text) return;
-
       const companySnap = await db.doc(`companies/${companyId}`).get();
       if (!companySnap.exists) return;
+
+      // ---------- بوست نزل في القناة ----------
+      // مهم: ده مش رسالة عميل — ده منشور. لازم نفصله عشان البوت ما يردّش عليه.
+      const channelPost = req.body?.channel_post;
+      if (channelPost) {
+        await recordChannelPost(companyId, secretData, channelPost);
+        return;
+      }
+
+      // ---------- رسالة من عميل ----------
+      const msg = req.body?.message;
+      if (!msg?.text) return;
 
       // الدخول من لينك بوست: /start post_<id> — العميل جاي من بوست معيّن
       let contextPostId = null;
@@ -306,6 +315,14 @@ exports.telegramWebhook = onRequest(
         text = "السلام عليكم، ممكن تفاصيل عن العرض ده؟";
       } else if (msg.text.trim() === "/start") {
         text = "السلام عليكم";
+      }
+
+      // أوامر /start بتظهر في شات العميل وشكلها وحش — نمسحها بعد ما نقراها
+      if (startMatch || msg.text.trim() === "/start") {
+        try {
+          const token = decrypt(secretData.token, TOKEN_ENC_KEY.value());
+          await telegram.deleteMessage(token, msg.chat.id, msg.message_id);
+        } catch { /* البوت ممكن مايكونش له صلاحية المسح — مش مشكلة */ }
       }
 
       await handleIncoming({
@@ -411,10 +428,26 @@ async function handleIncoming({ company, platform, externalId, customerName, tex
     ? appendConstants(result.reply, company, platform)
     : result.reply;
 
+  // ⚡ الإرسال المباشر: بدل ما نستنى تريجر تاني يقرا من قاعدة البيانات ويبعت
+  // (وده كان بيضيف وقت استيقاظ كامل)، بنبعت من هنا على طول.
+  let delivered = false;
+  if (channel === "message" && platform === "telegram") {
+    try {
+      const s = await db.doc(`companies/${companyId}/secrets/telegram`).get();
+      if (s.exists) {
+        const token = decrypt(s.data().token, TOKEN_ENC_KEY.value());
+        await telegram.sendMessage(token, externalId, finalReply);
+        delivered = true;
+      }
+    } catch (e) { logger.warn("direct send failed, falling back to trigger", e.message); }
+  }
+
   await convRef.collection("messages").add({
     from: "ai", text: finalReply, intent: result.intent,
     createdAt: admin.firestore.FieldValue.serverTimestamp(),
-    deliveryStatus: "pending",
+    // لو اتبعت خلاص، التريجر هيتخطاها؛ لو لأ هياخدها
+    deliveryStatus: delivered ? "sent" : "pending",
+    sentAt: delivered ? admin.firestore.FieldValue.serverTimestamp() : null,
   });
 
   await convRef.set({
@@ -478,7 +511,7 @@ exports.dispatchOutbound = onDocumentCreated(
     }
   });
 // ============================================================
-//  6) الناشر — نشر فوري بمجرد الحفظ، والمجدول كل 5 دقايق
+//  6) الناشر — نشر فوري بمجرد الحفظ، والمجدول بيتفحص كل دقيقة
 // ============================================================
 
 /** نشر بوست واحد على كل منصاته. بيرجّع true لو نزل على منصة واحدة على الأقل. */
@@ -498,12 +531,9 @@ async function publishOnePost(companyId, postRef, post) {
         const chatId = s.data().chatId;
         if (!chatId) throw new Error("مفيش معرّف قناة");
 
-        // زرار "اسأل عن العرض ده" — بيودّي البوت ومعاه معرّف البوست
+        // زرار "اسأل عن العرض ده" تحت البوست — بيودّي البوت ومعاه معرّف البوست
         // فلما العميل يكلّم البوت، بيعرف إنه بيسأل عن البوست ده تحديداً
-        const botUser = s.data().botUsername;
-        if (botUser) {
-          text += `\n\n💬 عايز تفاصيل أو تطلب؟ اضغط هنا:\nhttps://t.me/${botUser}?start=post_${postRef.id}`;
-        }
+        const askBtn = telegram.askButton(s.data().botUsername, postRef.id);
 
         const media = Array.isArray(post.media) ? post.media : [];
         const photos = media.filter((m) => m.type === "image" && m.url);
@@ -513,18 +543,23 @@ async function publishOnePost(companyId, postRef, post) {
           // تليجرام بيحط الكابشن على أول ملف بس (الحد 1024 حرف)
           const caption = text.length > 1024 ? text.slice(0, 1021) + "..." : text;
           const first = photos[0] || videos[0];
+          // الزرار بيتحط على آخر رسالة عشان يبان تحت البوست كله
+          const single = media.length === 1 && text.length <= 1024;
           const sent = first.type === "image"
-            ? await telegram.sendPhoto(token, chatId, first.url, caption)
-            : await telegram.sendVideo(token, chatId, first.url, caption);
+            ? await telegram.sendPhoto(token, chatId, first.url, caption, single ? askBtn : undefined)
+            : await telegram.sendVideo(token, chatId, first.url, caption, single ? askBtn : undefined);
           messageIds.telegram = sent?.message_id || null;
 
-          for (const m of media.filter((x) => x !== first && x.url)) {
-            if (m.type === "image") await telegram.sendPhoto(token, chatId, m.url, "");
-            else await telegram.sendVideo(token, chatId, m.url, "");
+          const rest = media.filter((x) => x !== first && x.url);
+          for (let i = 0; i < rest.length; i++) {
+            const m = rest[i];
+            const isLast = i === rest.length - 1 && text.length <= 1024;
+            if (m.type === "image") await telegram.sendPhoto(token, chatId, m.url, "", isLast ? askBtn : undefined);
+            else await telegram.sendVideo(token, chatId, m.url, "", isLast ? askBtn : undefined);
           }
-          if (text.length > 1024) await telegram.sendMessage(token, chatId, text);
+          if (text.length > 1024) await telegram.sendMessage(token, chatId, text, askBtn);
         } else {
-          const sent = await telegram.sendMessage(token, chatId, text);
+          const sent = await telegram.sendMessage(token, chatId, text, askBtn);
           messageIds.telegram = sent?.message_id || null;
         }
 
@@ -584,9 +619,9 @@ exports.onPostQueued = onDocumentCreated(
     }
   });
 
-/** المجدول: بيمشي كل 5 دقايق وياخد اللي جه معاده */
+/** المجدول: بيمشي كل دقيقة عشان البوست ينزل في معاده بالظبط */
 exports.runScheduledPosts = onSchedule(
-  { schedule: "every 5 minutes", timeZone: "Africa/Cairo", secrets: [TOKEN_ENC_KEY] },
+  { schedule: "every 1 minutes", timeZone: "Africa/Cairo", secrets: [TOKEN_ENC_KEY] },
   async () => {
     const now = admin.firestore.Timestamp.now();
     // ملحوظة: != في فايرستور بيستبعد المستندات اللي الحقل ناقص فيها، فبنفلتر محلياً
@@ -742,6 +777,78 @@ exports.runRollupNow = onCall({ secrets: [TOKEN_ENC_KEY] }, async (req) => {
     throw new HttpsError("internal", "تعذّر تحديث الإحصائيات: " + String(e.message).slice(0, 150));
   }
 });
+
+// ============================================================
+//  مسح البوست من المنصة لما يتمسح من النظام
+// ============================================================
+exports.onPostDeleted = onDocumentDeleted(
+  { document: "companies/{companyId}/posts/{postId}", secrets: [TOKEN_ENC_KEY] },
+  async (event) => {
+    const post = event.data?.data();
+    if (!post?.messageIds) return;   // مسودة أو مانزلش، مفيش حاجة تتمسح
+
+    const { companyId } = event.params;
+
+    if (post.messageIds.telegram) {
+      try {
+        const s = await db.doc(`companies/${companyId}/secrets/telegram`).get();
+        if (s.exists && s.data().chatId) {
+          const token = decrypt(s.data().token, TOKEN_ENC_KEY.value());
+          await telegram.deleteMessage(token, s.data().chatId, post.messageIds.telegram);
+          logger.info(`تم مسح بوست تليجرام ${post.messageIds.telegram}`);
+        }
+      } catch (e) {
+        // تليجرام بيمنع مسح رسالة أقدم من 48 ساعة
+        logger.warn(`تعذّر مسح بوست تليجرام: ${e.message}`);
+      }
+    }
+    // فيسبوك/انستجرام هيتضافوا بعد اعتماد ميتا
+  });
+
+/**
+ * تسجيل بوست نزل في القناة (سواء من النظام أو يدوي من تليجرام).
+ * ده بيخلي أي منشور في القناة يبقى ليه صفحة في النظام تقدر تحطله سعر.
+ */
+async function recordChannelPost(companyId, secretData, channelPost) {
+  const chatId = String(channelPost.chat?.id || "");
+  if (!chatId || String(secretData.chatId || "").replace(/^@/, "") !== String(channelPost.chat?.username || "")
+      && String(secretData.chatId) !== chatId) {
+    return;   // مش قناة الشركة دي
+  }
+
+  const messageId = channelPost.message_id;
+  const caption = channelPost.text || channelPost.caption || "";
+  if (!messageId) return;
+
+  // لو البوست ده اتنشر من النظام أصلاً، مانعملوش نسخة تانية
+  const existing = await db.collection(`companies/${companyId}/posts`)
+    .where("messageIds.telegram", "==", messageId).limit(1).get();
+  if (!existing.empty) return;
+
+  const media = [];
+  if (channelPost.photo?.length) media.push({ type: "image", fromTelegram: true });
+  if (channelPost.video) media.push({ type: "video", fromTelegram: true });
+
+  await db.collection(`companies/${companyId}/posts`).add({
+    caption,
+    productName: "",
+    price: 0,
+    platforms: ["telegram"],
+    versions: { telegram: caption },
+    media,
+    messageIds: { telegram: messageId },
+    audience: {},
+    results: { telegram: "sent" },
+    status: "published",
+    source: "telegram",          // اتنشر من تليجرام مش من النظام
+    scheduledAt: null,
+    createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    publishedAt: admin.firestore.FieldValue.serverTimestamp(),
+    createdByName: "تليجرام",
+  });
+
+  logger.info(`اتسجّل بوست من القناة: ${messageId}`);
+}
 
 // ============================================================
 //  أدوات داخلية

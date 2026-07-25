@@ -3,7 +3,7 @@
 // ============================================================
 import {
   db, collection, doc, addDoc, getDocs, deleteDoc, updateDoc,
-  query, orderBy, limit, serverTimestamp,
+  query, orderBy, limit, serverTimestamp, onSnapshot, trackSnapshot,
   storage, storageRef, uploadBytesResumable, getDownloadURL, deleteObject,
   fns, httpsCallable,
 } from "../firebase.js";
@@ -14,6 +14,7 @@ import { buildLinks } from "./settings.js";
 import { attachDraft } from "../drafts.js";
 
 let draft = null;
+let unsubPosts = null;
 
 const MAX_FILE_MB = 50;
 
@@ -502,10 +503,23 @@ async function submit(status) {
   }
 }
 
-async function loadPosts(box) {
+function loadPosts(box) {
   box.append(spinner());
+
+  // اشتراك لحظي — الحالة بتتحدّث لوحدها من "في الانتظار" لـ "تم النشر"
+  // من غير ما المستخدم يعمل ريفريش
+  unsubPosts?.();
+  unsubPosts = onSnapshot(
+    query(collection(db, ...tenantPath("posts")), orderBy("createdAt", "desc"), limit(12)),
+    (snap) => { trackSnapshot("posts", snap); drawPosts(box, snap); },
+    (e) => {
+      box.innerHTML = "";
+      box.append(el("p", { class: "text-muted", text: "تعذّر تحميل البوستات: " + e.message }));
+    });
+}
+
+function drawPosts(box, snap) {
   try {
-    const snap = await getDocs(query(collection(db, ...tenantPath("posts")), orderBy("createdAt", "desc"), limit(12)));
     box.innerHTML = "";
     box.append(el("h3", { class: "card-title", text: "البوستات والمجدولة" }));
     if (snap.empty) { box.append(el("p", { class: "text-muted", text: "مفيش بوستات لسه." })); return; }
@@ -518,6 +532,9 @@ async function loadPosts(box) {
         el("div", { style: "flex:1;min-width:0" }, [
           el("strong", { text: (p.caption || "").slice(0, 60) + ((p.caption || "").length > 60 ? "..." : ""), style: "display:block" }),
           el("small", { class: "text-muted", text: `${p.scheduledAt ? fmtDateTime(p.scheduledAt) : "فوري"} · ${(p.platforms || []).map((x) => PLATFORMS[x]?.label).join("، ") || "—"}` }),
+          p.source === "telegram"
+            ? el("small", { class: "badge badge-blue", style: "margin-top:5px",
+                text: "اتنشر من تليجرام — حط له سعر عشان البوت يرد بيه" }) : null,
         ]),
         el("span", { class: `badge ${badges[0]}`, text: badges[1] }),
       ]);
@@ -539,10 +556,12 @@ async function loadPosts(box) {
 
       const del = el("button", { class: "btn btn-light btn-sm", html: '<i class="fas fa-trash"></i>' });
       del.addEventListener("click", async () => {
-        if (!(await confirmBox("هتمسح البوست ده؟", { title: "حذف بوست" }))) return;
+        const msg = p.status === "published"
+          ? "هتمسح البوست من النظام ومن المنصات اللي اتنشر عليها.\n\nملحوظة: تليجرام بيمنع مسح أي رسالة أقدم من 48 ساعة."
+          : "هتمسح البوست ده؟";
+        if (!(await confirmBox(msg, { title: "حذف بوست" }))) return;
         await deleteDoc(doc(db, ...tenantPath("posts"), p.id));
-        toast("تم الحذف", "success");
-        import("../router.js").then((r) => r.reloadCurrent());
+        toast("تم الحذف", "success");   // القايمة بتتحدّث لوحدها
       });
       item.append(del);
       box.append(item);
@@ -723,6 +742,7 @@ function mkToggleBtn(icon, active) {
 }
 
 export function destroy() {
+  unsubPosts?.(); unsubPosts = null;
   draft?.flush();      // نحفظ اللي اتكتب قبل ما نسيب الشاشة
   draft?.destroy();
   draft = null;
