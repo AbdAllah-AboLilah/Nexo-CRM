@@ -50,6 +50,23 @@ function assertCompanyAccess(profile, companyId) {
     throw new HttpsError("permission-denied", "مش مسموح لك بالشركة دي.");
 }
 
+/**
+ * حفظ الدور والشركة في توكن الدخول (Custom Claims).
+ * قواعد الأمان بتقرا منها مباشرة بدل ما تستعلم من قاعدة البيانات —
+ * أسرع وأضمن، خصوصاً في رفع الملفات.
+ */
+async function syncClaims(uid, { role, companyId }) {
+  try {
+    await admin.auth().setCustomUserClaims(uid, {
+      role: role || null,
+      companyId: companyId || null,
+    });
+  } catch (e) {
+    logger.error(`setCustomUserClaims failed for ${uid}`, e);
+    throw e;
+  }
+}
+
 async function audit(companyId, action, actor, details = {}) {
   try {
     await db.collection(`companies/${companyId}/auditLog`).add({
@@ -104,6 +121,7 @@ exports.createUser = onCall(async (req) => {
     createdBy: profile.uid,
   });
 
+  await syncClaims(userRecord.uid, { role, companyId });
   await audit(companyId, "user.create", profile, { email, role });
   return { uid: userRecord.uid };
 });
@@ -139,6 +157,9 @@ exports.updateUser = onCall(async (req) => {
     if (password.length < 6) throw new HttpsError("invalid-argument", "كلمة المرور قصيرة.");
     await admin.auth().updateUser(uid, { password });
   }
+
+  // لو الدور اتغيّر، نحدّث التوكن كمان
+  if (updates.role) await syncClaims(uid, { role: updates.role, companyId: target.companyId });
 
   await audit(target.companyId, "user.update", profile, { uid, ...updates });
   return { ok: true };
@@ -1227,4 +1248,42 @@ exports.generateTemplates = onCall(async (req) => {
     logger.error("generateTemplates failed", e);
     throw new HttpsError("internal", "تعذّر توليد القوالب. جرّب تاني.");
   }
+});
+
+// ============================================================
+//  مزامنة صلاحيات التوكن للمستخدمين الحاليين
+//  بتتنادى تلقائياً أول ما المستخدم يدخل ولقى توكنه ناقص
+// ============================================================
+exports.refreshMyClaims = onCall(async (req) => {
+  if (!req.auth) throw new HttpsError("unauthenticated", "لازم تسجل دخول.");
+  const uid = req.auth.uid;
+
+  const snap = await db.doc(`users/${uid}`).get();
+  if (!snap.exists) throw new HttpsError("permission-denied", "المستخدم مش مسجل في النظام.");
+
+  const p = snap.data();
+  if (p.active === false) throw new HttpsError("permission-denied", "الحساب موقوف.");
+
+  await syncClaims(uid, { role: p.role, companyId: p.companyId });
+  return { ok: true, role: p.role, companyId: p.companyId || null };
+});
+
+/** مزامنة كل المستخدمين مرة واحدة — لمنشئ النظام */
+exports.syncAllClaims = onCall(async (req) => {
+  const profile = await requireProfile(req.auth);
+  if (profile.role !== "superadmin")
+    throw new HttpsError("permission-denied", "لمنشئ النظام فقط.");
+
+  const users = await db.collection("users").get();
+  let done = 0, failed = 0;
+
+  for (const u of users.docs) {
+    try {
+      const d = u.data();
+      await syncClaims(u.id, { role: d.role, companyId: d.companyId });
+      done++;
+    } catch { failed++; }
+  }
+
+  return { ok: true, done, failed };
 });

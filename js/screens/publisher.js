@@ -248,8 +248,12 @@ export async function render(root) {
 
   function uploadError(err) {
     const c = err?.code || "";
-    if (c.includes("unauthorized")) return "مش مسموح لك برفع ملفات — راجع صلاحياتك.";
+    if (c.includes("unauthorized")) {
+      return "الرفع اترفض. جرّب تعمل تسجيل خروج ودخول تاني عشان صلاحياتك تتحدّث.";
+    }
+    if (c.includes("quota-exceeded")) return "مساحة التخزين خلصت — كلّم إدارة النظام.";
     if (c.includes("retry-limit") || c.includes("canceled")) return "الرفع فشل — راجع الإنترنت وحاول تاني.";
+    if (c.includes("unauthenticated")) return "الجلسة انتهت — اعمل تسجيل دخول تاني.";
     if (c.includes("unknown")) return "خدمة التخزين لسه مش مفعّلة في المشروع.";
     return "فشل الرفع: " + (err?.message || c);
   }

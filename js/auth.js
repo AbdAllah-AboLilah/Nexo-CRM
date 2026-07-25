@@ -68,6 +68,9 @@ export function guard() {
         return;
       }
 
+      // نتأكد إن الدور موجود في التوكن — قواعد رفع الملفات بتعتمد عليه
+      await ensureClaims(user, session.profile);
+
       // Super Admin ممكن يكون شايف كل الشركات؛ الباقي مربوط بشركته
       const savedTenant = localStorage.getItem("nexo.tenant");
       session.companyId = isSuper()
@@ -78,6 +81,28 @@ export function guard() {
       resolve(session);
     });
   });
+}
+
+/**
+ * التأكد إن الدور والشركة موجودين في توكن الدخول.
+ * قواعد رفع الملفات بتقرا منهم مباشرة، فلو ناقصين الرفع بيتمنع.
+ * بنطلب من السيرفر يضيفهم وبنجدّد التوكن.
+ */
+async function ensureClaims(user, profile) {
+  if (!profile) return;
+  try {
+    const tokenResult = await user.getIdTokenResult();
+    const c = tokenResult.claims || {};
+    const upToDate = c.role === profile.role
+      && (c.companyId || null) === (profile.companyId || null);
+    if (upToDate) return;
+
+    const { fns, httpsCallable } = await import("./firebase.js");
+    await httpsCallable(fns, "refreshMyClaims")();
+    await user.getIdToken(true);   // تجديد التوكن عشان الصلاحيات الجديدة تسري
+  } catch (e) {
+    console.warn("تعذّر تحديث صلاحيات التوكن:", e.message);
+  }
 }
 
 async function loadOrCreateProfile(user) {

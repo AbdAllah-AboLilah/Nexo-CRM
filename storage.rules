@@ -1,34 +1,36 @@
 rules_version = '2';
 
 // ملفات البوستات (صور وفيديو) — كل شركة في مجلدها
+//
+// ملحوظة معمارية: بنعتمد على Custom Claims في توكن الدخول بدل
+// firestore.get() — لأن الاستعلام مع كل رفع بطيء وبيفشل أحياناً
+// (وده كان سبب رسالة "مش مسموح لك برفع ملفات").
+// الـ claims بتتحط من السيرفر وقت إنشاء/تعديل المستخدم.
 service firebase.storage {
   match /b/{bucket}/o {
 
     function signedIn() { return request.auth != null; }
+    function claims()   { return request.auth.token; }
 
-    function myProfile() {
-      return firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data;
-    }
-
-    function inCompany(cid) {
-      return signedIn()
-        && firestore.exists(/databases/(default)/documents/users/$(request.auth.uid))
-        && myProfile().active != false
-        && (myProfile().role == 'superadmin' || myProfile().companyId == cid);
-    }
+    function isSuper()  { return signedIn() && claims().role == 'superadmin'; }
 
     function canPublish(cid) {
-      return inCompany(cid)
-        && myProfile().role in ['superadmin', 'owner', 'manager'];
+      return signedIn() && (
+        isSuper() ||
+        (claims().companyId == cid && claims().role in ['owner', 'manager'])
+      );
     }
 
     match /companies/{companyId}/posts/{fileName} {
-      // القراءة مفتوحة عشان المنصات (تليجرام/ميتا) تقدر تجيب الصورة من اللينك
+      // القراءة مفتوحة عن قصد: تليجرام وميتا بيجيبوا الصورة من اللينك
       allow read: if true;
 
+      // ملحوظة: في الرفع المتقطّع (resumable) الـ contentType بيكون
+      // متاح في طلب بدء الجلسة بس، فبنتحقق منه لو موجود فقط.
       allow write: if canPublish(companyId)
                    && request.resource.size < 60 * 1024 * 1024
-                   && (request.resource.contentType.matches('image/.*')
+                   && (request.resource.contentType == null
+                       || request.resource.contentType.matches('image/.*')
                        || request.resource.contentType.matches('video/.*'));
 
       allow delete: if canPublish(companyId);
