@@ -23,7 +23,7 @@
 }
 
 * { margin: 0; padding: 0; box-sizing: border-box; }
-html, body { height: 100%; }
+html, body { height: 100%; max-width: 100%; overflow-x: hidden; }
 body {
   font-family: 'Tajawal', 'Segoe UI', Tahoma, sans-serif;
   background: var(--bg);
@@ -97,8 +97,15 @@ body:not(.booting) .boot-screen { opacity: 0; pointer-events: none; }
   display: flex; align-items: center; justify-content: space-between;
   padding: 0 22px; gap: 14px; box-shadow: 0 1px 3px rgba(24,28,50,.06); z-index: 30;
 }
-.topbar-start, .topbar-end { display: flex; align-items: center; gap: 14px; min-width: 0; }
-.topbar h2 { font-size: 17px; font-weight: 700; white-space: nowrap; }
+/* الجهة اللي فيها العنوان هي اللي بتتقلّص، والجهة التانية ثابتة.
+   من غير كده العنوان الطويل بيدفع الأفاتار برّه الشاشة، والصفحة
+   كلها بتتزحلق أفقياً فكل المحتوى بيتقص. */
+.topbar-start { display: flex; align-items: center; gap: 14px; min-width: 0; flex: 1 1 auto; }
+.topbar-end   { display: flex; align-items: center; gap: 14px; flex: 0 0 auto; }
+.topbar h2 {
+  font-size: 17px; font-weight: 700; white-space: nowrap;
+  min-width: 0; overflow: hidden; text-overflow: ellipsis;
+}
 .menu-toggle { display: none; }
 
 .icon-btn {
@@ -961,3 +968,96 @@ tr.row-selected td { background: rgba(37, 99, 235, .07); }
   .pif-preview img, .pif-empty { width: 100%; max-width: 170px; height: 170px; }
   .pif-actions .btn { flex: 1 1 auto; }
 }
+
+/* ============================================================
+   الموبايل — مراجعة شاملة
+   المشكلة الأساسية اللي كانت بتخلي كل الشاشات تبان مقطوعة:
+   العنوان الطويل في الشريط العلوي كان بيدفع المحتوى برّه الشاشة،
+   فالصفحة كلها تتزحلق أفقياً. الإصلاح فوق (topbar-start/end)،
+   والقواعد دي بتمنع أي عنصر تاني يعمل نفس الحاجة.
+   ============================================================ */
+@media (max-width: 900px) {
+  /* أي عنصر مفروض ياخد حجمه ماينكمشش — الباقي يتقلّص */
+  .icon-btn, .user-avatar, .status-dot, .send-btn { flex-shrink: 0; }
+
+  /* شارة الشركة بتتقلّص وتتقطع بنقط بدل ما تدفع الشريط */
+  .tenant-chip {
+    min-width: 0; flex-shrink: 1;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+
+  /* الشريط العلوي: مسافات أقل عشان يفضل فيه مكان للعنوان */
+  .topbar { gap: 8px; padding: 0 12px; }
+  .topbar-start, .topbar-end { gap: 8px; }
+
+  /* زراير رأس الشاشة: شريط أفقي بتمرير بدل ما تتزنق أو تتقص */
+  .head-actions {
+    width: 100%; flex-wrap: nowrap; overflow-x: auto;
+    scrollbar-width: none; -webkit-overflow-scrolling: touch;
+    padding-bottom: 2px;
+  }
+  .head-actions::-webkit-scrollbar { display: none; }
+  .head-actions .btn { flex: 0 0 auto; white-space: nowrap; }
+
+  /* أي شريط شرائح (فلاتر/تابات) نفس المعاملة */
+  .tabs, .quick-actions {
+    flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none;
+  }
+  .tabs::-webkit-scrollbar, .quick-actions::-webkit-scrollbar { display: none; }
+  .tabs button, .quick-actions .chip { flex: 0 0 auto; white-space: nowrap; }
+
+  /* صفوف الفورم تحت بعضها */
+  .form-row { flex-direction: column; gap: 0; }
+
+  /* الرسايل ماتخرجش من الشات */
+  .message { overflow-wrap: anywhere; }
+
+  /* المودال: ياخد عرض الشاشة كله ناقص هامش بسيط */
+  .modal { width: 100%; max-width: calc(100vw - 20px) !important; }
+}
+
+@media (max-width: 600px) {
+  /* العنوان يصغّر شوية عشان يبان أكتر منه قبل ما يتقطع */
+  .topbar h2 { font-size: 14.5px; }
+  .head-actions .btn { font-size: 12.5px; padding: 8px 12px; }
+
+  /* كروت الإحصائيات: اتنين في الصف */
+  .grid-2, .grid-3, .grid-4 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .stat-number { font-size: 19px; }
+  .stat-sub { font-size: 10px; overflow-wrap: anywhere; }
+}
+
+@media (max-width: 380px) {
+  /* أضيق الأجهزة: كارت واحد في الصف */
+  .grid-2, .grid-3, .grid-4 { grid-template-columns: 1fr; }
+  .content-area { padding: 11px; }
+}
+
+/* ===== شبكة الناشر الذكي =====
+   عمودين على الشاشة الكبيرة، عمود واحد على الموبايل.
+   كان بيتحدد من JS وقت الرسم بس، فمكانش بيستجيب لتغيير المقاس. */
+.publisher-grid {
+  grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr);
+  align-items: start;
+}
+@media (max-width: 900px) {
+  .publisher-grid { grid-template-columns: 1fr; }
+}
+
+/* ============================================================
+   قاعدة أساسية للتقلّص
+   عناصر الـ grid والـ flex عندها min-width:auto افتراضياً، يعني
+   مابتقدرش تتقلّص تحت عرض محتواها. فشريط شرائح فيه 6 أزرار كان
+   بيخلي الكارت اللي حواليه أعرض من الشاشة.
+   ============================================================ */
+.grid > *,
+.main-content,
+.card { min-width: 0; }
+
+/* أشرطة الشرائح الأفقية: بتمرّر جوّه نفسها بدل ما توسّع أبوها */
+.quick-actions,
+.tabs,
+.head-actions,
+.pub-tabs,
+.inbox-filters,
+.platform-tabs { min-width: 0; max-width: 100%; }

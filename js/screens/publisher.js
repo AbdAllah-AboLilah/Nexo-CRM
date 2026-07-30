@@ -50,8 +50,9 @@ export async function render(root) {
     ]),
   ]));
 
-  const grid = el("div", { class: "grid", style: "grid-template-columns:minmax(0,1.35fr) minmax(0,1fr);align-items:start" });
-  if (window.innerWidth <= 900) grid.style.gridTemplateColumns = "1fr";
+  // التقسيم بيتحدد من CSS مش من JS — عشان يتغيّر مع دوران الشاشة
+  // وتغيير حجم النافذة، مش وقت الرسم بس
+  const grid = el("div", { class: "grid publisher-grid" });
   root.append(grid);
 
   const left = el("div");
