@@ -10,6 +10,9 @@ export function el(tag, props = {}, children = []) {
     else if (k === "html") node.innerHTML = v;
     else if (k === "text") node.textContent = v;
     else if (k.startsWith("on") && typeof v === "function") node.addEventListener(k.slice(2).toLowerCase(), v);
+    // النصوص الطويلة (textarea) مابتقراش خاصية value كـ attribute —
+    // لازم تتحط على الخاصية نفسها، وإلا الحقل بيطلع فاضي
+    else if (k === "value" && tag === "textarea") node.value = v ?? "";
     else if (v !== null && v !== undefined && v !== false) node.setAttribute(k, v);
   }
   (Array.isArray(children) ? children : [children]).forEach((c) => {

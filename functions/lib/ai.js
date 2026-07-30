@@ -32,7 +32,12 @@ function buildSystemPrompt(company, products = []) {
     "بيانات ثابتة تقدر ترد بيها:",
     k.address ? `- العنوان: ${k.address}` : "",
     k.workingHours ? `- مواعيد العمل: ${k.workingHours}` : "",
-    k.phones ? `- أرقام التواصل: ${k.phones}` : "",
+    k.phones ? `- أرقام التواصل (اتصال عادي): ${k.phones}` : "",
+    k.whatsappNumber
+      ? `- رقم الواتساب: ${k.whatsappNumber} (لينك: https://wa.me/${String(k.whatsappNumber).replace(/\D/g, "")})`
+      : "- الواتساب: مفيش رقم واتساب مسجّل.",
+    k.telegramBot ? `- بوت تليجرام: https://t.me/${String(k.telegramBot).replace(/^@/, "")}` : "",
+    k.telegramChannel ? `- قناة تليجرام: https://t.me/${String(k.telegramChannel).replace(/^@/, "")}` : "",
     k.exchangePolicy ? `- سياسة الاستبدال: ${k.exchangePolicy}` : "",
     "",
     "قائمة الأصناف والأسعار:",
@@ -43,6 +48,10 @@ function buildSystemPrompt(company, products = []) {
     "2. لو العميل بيسأل بصيغة تانية لنفس المنتج، افهم قصده من المعنى (مثلاً لو الصنف مسجّل باسم مختلف شوية عن اللي العميل كتبه).",
     "3. لو السؤال معقّد أو فيه شكوى، اعتذر بلطف وقول إن خدمة العملاء هترد فوراً.",
     "4. الردود قصيرة ومباشرة (سطرين لثلاثة على الأكثر).",
+    "5. أرقام التواصل ورقم الواتساب حاجتين مختلفتين. ممنوع تقول إن رقم "
+      + "التواصل عليه واتساب — ابعت رقم الواتساب المسجّل فوق بس. ولو مفيش "
+      + "رقم واتساب مسجّل، قول إن الواتساب مش متاح حالياً واعرض رقم التواصل بدله.",
+    "6. ممنوع تخترع أي رقم أو لينك أو عنوان مش مكتوب فوق حرفياً.",
     ai.extraInstructions ? `\nتعليمات إضافية من صاحب الشركة:\n${ai.extraInstructions}` : "",
   ].filter(Boolean).join("\n");
 }
@@ -241,6 +250,253 @@ async function generateTemplates({ companyName, businessType, tone, extraHint })
   }
 }
 
+/**
+ * صياغة "نشاط الشركة" من كلام صاحب المكان بلغته العادية.
+ * الجملة دي بتتحط في تعليمات البوت، فبتأثّر على كل رد بعد كده — لازم تبقى
+ * دقيقة ومختصرة مش إعلان.
+ */
+async function describeBusiness({ companyName, rawInput }) {
+  const ai = client();
+
+  const instruction = [
+    "أنت بتساعد صاحب محل يوصف نشاط شغله في جملة واحدة واضحة.",
+    companyName ? `اسم المكان: "${companyName}".` : "",
+    "",
+    "المطلوب: حوّل كلامه لجملة أو جملتين بالعامية المصرية توصف:",
+    "إيه اللي بيبيعه أو بيقدّمه، ولمين، وإيه اللي يميّزه لو ذكره.",
+    "",
+    "قواعد:",
+    "- ممنوع تخترع أي معلومة مش موجودة في كلامه (مواعيد، أسعار، فروع، سنين خبرة).",
+    "- من غير مبالغة إعلانية ولا كلام إنشائي.",
+    "- 25 كلمة كحد أقصى.",
+    "",
+    "رجّع JSON بالشكل ده فقط: {\"text\":\"الجملة\"}",
+  ].filter(Boolean).join("\n");
+
+  const res = await ai.models.generateContent({
+    model: "gemini-2.5-flash",
+    contents: String(rawInput || "").slice(0, 1500),
+    config: {
+      systemInstruction: instruction,
+      responseMimeType: "application/json",
+      temperature: 0.8,
+      thinkingConfig: { thinkingBudget: 0 },
+    },
+  });
+
+  try {
+    return String(JSON.parse((res.text || "").trim()).text || "").trim();
+  } catch {
+    return String(res.text || "").trim().slice(0, 300);
+  }
+}
+
+/**
+ * كتابة بوست تسويقي من بيانات صنف — وبيبص على صورة الصنف لو موجودة.
+ * Gemini بيقرا الصور، فبيقدر يوصف اللون والشكل والتفاصيل اللي مش مكتوبة.
+ */
+async function postFromProduct({ company, product, imageBytes, imageMime }) {
+  const ai = client();
+  const c = company.ai || {};
+  const discount = product.priceBefore > product.priceAfter && product.priceBefore > 0
+    ? Math.round((1 - product.priceAfter / product.priceBefore) * 100) : 0;
+
+  const instruction = [
+    `أنت كاتب محتوى تسويقي لصفحة "${company.name || ""}".`,
+    c.businessType || company.businessType ? `نشاط الصفحة: ${c.businessType || company.businessType}.` : "",
+    `الأسلوب: ${TONE_TEXT[c.tone] || TONE_TEXT.egyptian}`,
+    "",
+    "بيانات الصنف:",
+    `- الاسم: ${product.name}`,
+    product.category ? `- القسم: ${product.category}` : "",
+    product.subCategory ? `- القسم الفرعي: ${product.subCategory}` : "",
+    // السعر مابيتبعتش للموديل عن قصد — النظام هو اللي بيضيفه تحت البوست
+    // لو صاحب المكان فعّل خيار "السعر"، فمانفعش الموديل يكتبه مرتين.
+    discount > 0 ? `- على الصنف ده خصم ${discount}%` : "",
+    imageBytes ? "- مرفق صورة الصنف: بُص عليها واستخدم اللي شايفه فيها (اللون، الشكل، التفاصيل)." : "",
+    "",
+    "المطلوب: كابشن بوست جاهز للنشر على السوشيال ميديا.",
+    "",
+    "قواعد:",
+    "- 3 لـ 5 سطور، مش أطول.",
+    "- ابدأ بجملة تشد الانتباه.",
+    discount > 0
+      ? `- اذكر إن فيه خصم ${discount}% كسبب للشراء دلوقتي — النسبة بس، من غير أي رقم سعر.`
+      : "- ممنوع تتكلم عن خصم أو تخفيض، مفيش خصم على الصنف ده.",
+    "- إيموجي بالمعقول (3 لـ 5).",
+    "- اقفل بدعوة للتواصل أو الطلب.",
+    "- ممنوع تخترع مواصفات مش في البيانات ولا في الصورة (ضمان، مقاسات، بلد صنع، مدة توصيل).",
+    "- من غير هاشتاجات.",
+    "",
+    "⚠️ مهم جداً: ممنوع تماماً تكتب أي رقم سعر في الكابشن — لا بالجنيه"
+      + " ولا بأي عملة، ولا حتى تلميح زي \"بـ 500 بس\". السعر بيتحط أوتوماتيك"
+      + " تحت البوست من النظام. لو كتبته هيتكرر مرتين.",
+    "",
+    "رجّع JSON بالشكل ده فقط: {\"caption\":\"النص\"}",
+  ].filter(Boolean).join("\n");
+
+  const parts = [{ text: `اكتب بوست عن "${product.name}".` }];
+  if (imageBytes) {
+    parts.push({ inlineData: { mimeType: imageMime || "image/jpeg", data: imageBytes } });
+  }
+
+  const res = await ai.models.generateContent({
+    model: "gemini-2.5-flash",
+    contents: [{ role: "user", parts }],
+    config: {
+      systemInstruction: instruction,
+      responseMimeType: "application/json",
+      temperature: 1.0,
+      thinkingConfig: { thinkingBudget: 0 },
+    },
+  });
+
+  let caption;
+  try {
+    caption = String(JSON.parse((res.text || "").trim()).caption || "").trim();
+  } catch {
+    caption = String(res.text || "").trim().slice(0, 900);
+  }
+
+  return stripPrices(caption, product);
+}
+
+/**
+ * شبكة أمان: الموديل أحياناً بيكتب السعر رغم التعليمات، والسعر بيتحط
+ * تحت البوست من النظام — فبنشيل أي سطر فيه رقم سعر عشان مايتكررش.
+ * نسبة الخصم (%) بتفضل زي ما هي.
+ */
+function stripPrices(text, product) {
+  const nums = [product?.priceAfter, product?.priceBefore]
+    .map((n) => Number(n) || 0).filter((n) => n > 0);
+
+  return String(text || "")
+    .split("\n")
+    .filter((line) => {
+      if (/%/.test(line)) return true;                 // سطر الخصم يفضل
+      if (/\b(جنيه|ج\.م|جم|EGP|ر\.س|درهم|دينار)\b/i.test(line)) return false;
+      // رقم من أرقام الصنف مكتوب في السطر = سعر مسرّب
+      return !nums.some((n) => new RegExp(`(^|\\D)${n}(\\D|$)`).test(line));
+    })
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+/**
+ * استخراج بيانات طلب من محادثة.
+ * بيرجّع اللي اتقال بالحرف بس — أي حقل مش مذكور بيرجع فاضي عشان
+ * الموظف يشوفه فاضي ويسأل العميل، مش يلاقي بيانات مخترعة.
+ */
+async function extractOrder({ transcript, products = [], governorates = [] }) {
+  const ai = client();
+
+  const instruction = [
+    "أنت بتقرا محادثة بين متجر وعميل، وبتستخرج منها بيانات الطلب.",
+    "",
+    "قواعد صارمة:",
+    "- استخرج اللي اتقال في المحادثة بس. أي حقل مش متأكد منه سيبه فاضي (\"\").",
+    "- ممنوع تخترع اسم أو رقم تليفون أو عنوان أو كمية.",
+    "- الأسعار خدها من قائمة الأصناف تحت لو الصنف موجود فيها، مش من كلام العميل.",
+    "- لو الصنف مش في القائمة، حط سعره 0.",
+    governorates.length ? `- المحافظة لازم تكون واحدة من دول بالظبط أو فاضية: ${governorates.join("، ")}` : "",
+    "",
+    products.length ? "قائمة الأصناف والأسعار:" : "",
+    products.slice(0, 200).map((p) => `- ${p.name}: ${p.priceAfter || 0}`).join("\n"),
+    "",
+    "رجّع JSON بالشكل ده فقط:",
+    '{"customerName":"","phone":"","governorate":"","address":"",',
+    '"items":[{"name":"","qty":1,"price":0}],"notes":"","confidence":"high|medium|low"}',
+    "",
+    "الـ notes: لخّص أي طلب خاص من العميل (لون، مقاس، ميعاد) في سطر.",
+    "الـ confidence: low لو أغلب البيانات ناقصة.",
+  ].filter(Boolean).join("\n");
+
+  const res = await ai.models.generateContent({
+    model: "gemini-2.5-flash",
+    contents: String(transcript || "").slice(0, 8000),
+    config: {
+      systemInstruction: instruction,
+      responseMimeType: "application/json",
+      temperature: 0.2,
+      thinkingConfig: { thinkingBudget: 0 },
+    },
+  });
+
+  try {
+    const p = JSON.parse((res.text || "").trim());
+    return {
+      customerName: String(p.customerName || "").trim(),
+      phone: String(p.phone || "").replace(/[^\d+]/g, "").slice(0, 20),
+      governorate: governorates.includes(p.governorate) ? p.governorate : "",
+      address: String(p.address || "").trim(),
+      items: Array.isArray(p.items)
+        ? p.items.filter((i) => i && String(i.name || "").trim()).slice(0, 30).map((i) => ({
+            name: String(i.name).trim().slice(0, 120),
+            qty: Math.max(1, Number(i.qty) || 1),
+            price: Math.max(0, Number(i.price) || 0),
+          }))
+        : [],
+      notes: String(p.notes || "").trim().slice(0, 400),
+      confidence: ["high", "medium", "low"].includes(p.confidence) ? p.confidence : "low",
+    };
+  } catch {
+    return { customerName: "", phone: "", governorate: "", address: "", items: [], notes: "", confidence: "low" };
+  }
+}
+
+/**
+ * تحديد أي بوست بتطابقه صورة العميل.
+ * بنبعت صورة العميل الأول وبعدين صور البوستات مرقّمة، ونسأل الموديل
+ * رقم المطابق. بيرجّع معرّف البوست أو null لو مش متأكد.
+ */
+async function identifyPost({ customerImg, candidates }) {
+  const ai = client();
+
+  const parts = [
+    { text: "دي صورة بعتها عميل:" },
+    { inlineData: { mimeType: "image/jpeg", data: customerImg } },
+    { text: "\nودي صور منتجاتنا:" },
+  ];
+  candidates.forEach((c, i) => {
+    parts.push({ text: `\nصورة رقم ${i + 1}${c.name ? ` — ${c.name}` : ""}:` });
+    parts.push({ inlineData: { mimeType: "image/jpeg", data: c.data } });
+  });
+
+  const instruction = [
+    "بتقارن صورة بعتها عميل بصور منتجات متجر، وبتحدد أنهي منتج ده.",
+    "",
+    "قواعد صارمة:",
+    "- المنتج لازم يكون **هو هو**، مش شبهه. لو شبهه بس مش متأكد، رجّع 0.",
+    "- الصورة ممكن تكون سكرين شوت أو مقصوصة أو إضاءتها مختلفة — ركّز على",
+    "  المنتج نفسه (شكله، لونه، الماركة، الموديل) مش جودة الصورة.",
+    "- لو مش لاقي مطابقة واضحة، رجّع 0. الغلط هنا معناه سعر غلط للعميل.",
+    "",
+    `رجّع JSON بالشكل ده فقط: {"match":<رقم من 1 لـ ${candidates.length} أو 0>,"confidence":"high|medium|low"}`,
+  ].join("\n");
+
+  const res = await ai.models.generateContent({
+    model: "gemini-2.5-flash",
+    contents: [{ role: "user", parts }],
+    config: {
+      systemInstruction: instruction,
+      responseMimeType: "application/json",
+      temperature: 0.1,
+      thinkingConfig: { thinkingBudget: 0 },
+    },
+  });
+
+  try {
+    const p = JSON.parse((res.text || "").trim());
+    const idx = Number(p.match) || 0;
+    // سعر غلط أسوأ من "مش عارف"، فبنقبل التأكيد العالي بس
+    if (idx < 1 || idx > candidates.length || p.confidence === "low") return null;
+    return candidates[idx - 1].id;
+  } catch {
+    return null;
+  }
+}
+
 /** اختبار سريع للتأكد إن الاتصال بـ Gemini شغال */
 async function ping() {
   const ai = client();
@@ -252,6 +508,7 @@ async function ping() {
 }
 
 module.exports = {
-  buildSystemPrompt, generateReply, assistPost, helpAnswer, generateTemplates, ping,
+  buildSystemPrompt, generateReply, assistPost, helpAnswer, generateTemplates,
+  describeBusiness, postFromProduct, extractOrder, identifyPost, ping,
   TONE_TEXT, ASSIST_TASKS, client,
 };

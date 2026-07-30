@@ -10,7 +10,12 @@ const { setGlobalOptions, logger } = require("firebase-functions/v2");
 const admin = require("firebase-admin");
 
 const { encrypt, decrypt, verifyMetaSignature } = require("./lib/crypto");
-const { generateReply, assistPost, helpAnswer, generateTemplates, ping, ASSIST_TASKS } = require("./lib/ai");
+const {
+  generateReply, assistPost, helpAnswer, generateTemplates,
+  describeBusiness, postFromProduct, extractOrder, identifyPost, ping, ASSIST_TASKS,
+} = require("./lib/ai");
+const GOVERNORATES = require("./lib/governorates");
+const { tokenize, TOKEN_VERSION } = require("./lib/search");
 const { buildKnowledgeText } = require("./lib/kb");
 const { notify, usersOf, usersAtLeast, superAdmins } = require("./lib/notify");
 const telegram = require("./lib/telegram");
@@ -324,41 +329,226 @@ exports.telegramWebhook = onRequest(
 
       // ---------- رسالة من عميل ----------
       const msg = req.body?.message;
-      if (!msg?.text) return;
+      if (!msg) return;
 
-      // الدخول من لينك بوست: /start post_<id> — العميل جاي من بوست معيّن
-      let contextPostId = null;
-      let text = msg.text;
-      const startMatch = /^\/start\s+post_(\S+)/.exec(msg.text.trim());
-      if (startMatch) {
-        contextPostId = startMatch[1];
-        // نستبدل أمر /start برسالة طبيعية عشان الـ AI يرحّب ويربطها بالبوست
-        text = "السلام عليكم، ممكن تفاصيل عن العرض ده؟";
-      } else if (msg.text.trim() === "/start") {
-        text = "السلام عليكم";
+      const company = { id: companyId, ...companySnap.data() };
+
+      // ---------- صورة من غير نص ----------
+      // العميل بيبعت صورة منتج شافها في بوست قديم وبيسأل عن سعرها.
+      // بنحاول نعرف البوست، وبعدين نكمّل عادي بسياقه.
+      if (!msg.text && (msg.photo || msg.document?.mime_type?.startsWith("image/"))) {
+        await handlePhoto({ company, secretData, msg });
+        return;
       }
 
-      // أوامر /start بتظهر في شات العميل وشكلها وحش — نمسحها بعد ما نقراها
-      if (startMatch || msg.text.trim() === "/start") {
-        try {
-          const token = decrypt(secretData.token, TOKEN_ENC_KEY.value());
-          await telegram.deleteMessage(token, msg.chat.id, msg.message_id);
-        } catch { /* البوت ممكن مايكونش له صلاحية المسح — مش مشكلة */ }
+      if (!msg.text) return;
+      const raw = msg.text.trim();
+
+      // ---------- الدخول من زراير البوست ----------
+      // /start post_<id> = "تفاصيل المنتج" | /start contact = "تواصل معانا"
+      //
+      // مهم: مابنشغّلش الذكاء الاصطناعي هنا. البوت بيرحّب ويعرض اقتراحات
+      // أسئلة، والعميل هو اللي يختار — عشان مايتبعتش سؤال باسمه من غير إذنه.
+      const startMatch = /^\/start(?:\s+(\S+))?$/.exec(raw);
+      if (startMatch) {
+        const payload = startMatch[1] || "";
+        const postId = payload.startsWith("post_") ? payload.slice(5) : null;
+        await handleStart({ company, secretData, msg, postId });
+        return;
       }
 
       await handleIncoming({
-        company: { id: companyId, ...companySnap.data() },
+        company,
         platform: "telegram",
         externalId: String(msg.chat.id),
         customerName: [msg.from?.first_name, msg.from?.last_name].filter(Boolean).join(" ") || "عميل",
-        text,
+        text: msg.text,
         channel: "message",
-        contextPostId,
       });
     } catch (err) {
       logger.error("telegramWebhook error", err);
     }
   });
+
+// ============================================================
+//  دخول العميل على البوت من زرار بوست
+// ============================================================
+/**
+ * البوت مايقدرش يغيّر نص رسالة العميل ولا يكتب مكانه — ده قيد في تليجرام.
+ * فبدل ما نبعت سؤال باسم العميل من غير إذنه، بنرحّب بيه ونعرض عليه
+ * اقتراحات تحت مربع الكتابة. لما يدوس على واحدة بتتبعت كرسالة عادية منه.
+ */
+async function handleStart({ company, secretData, msg, postId }) {
+  const companyId = company.id;
+  const chatId = String(msg.chat.id);
+  const convRef = db.doc(`companies/${companyId}/conversations/telegram_${chatId}`);
+  const token = decrypt(secretData.token, TOKEN_ENC_KEY.value());
+
+  // /start شكلها تقني ووحش في الشات — بنمسحها إلا لو صاحب المكان عايزها ظاهرة
+  if (company.ai?.keepStartCommand !== true) {
+    try { await telegram.deleteMessage(token, chatId, msg.message_id); } catch { /* مش مشكلة */ }
+  }
+
+  // نجيب بيانات البوست عشان الترحيب يبقى مربوط بالمنتج اللي العميل جاي منه
+  let product = null, price = null;
+  if (postId) {
+    try {
+      const snap = await db.doc(`companies/${companyId}/posts/${postId}`).get();
+      if (snap.exists) {
+        const pd = snap.data();
+        product = pd.productName || null;
+        price = pd.price || null;
+      }
+    } catch (e) { logger.warn("start post lookup failed", e.message); }
+  }
+
+  const brand = escapeHtml(company.name || "");
+  const greeting = postId
+    ? `أهلاً بيك في ${brand} 👋\n\n` +
+      (product ? `إنت بتسأل عن <b>${escapeHtml(product)}</b>` +
+        (price ? ` — السعر <b>${price}</b> جنيه.` : ".") + "\n\n" : "") +
+      "اختار سؤالك من اللي تحت، أو اكتب اللي محتاجه وأنا هرد عليك 👇"
+    : `أهلاً بيك في ${brand} 👋\n\nتحت أمرك — اختار من الاقتراحات أو اكتب استفسارك 👇`;
+
+  const suggestions = postId
+    ? ["ممكن تفاصيل عن العرض ده؟", "السعر كام؟", "متوفر دلوقتي؟", "التوصيل بكام؟"]
+    : ["عايز أستفسر عن منتج", "إيه العروض المتاحة؟", "مواعيد العمل إيه؟", "عايز أتكلم مع حد"];
+
+  await telegram.sendMessage(token, chatId, greeting, telegram.suggestKeyboard(suggestions));
+
+  // بنسجّل المحادثة وسياق البوست عشان أول سؤال يبعته يبقى عارف هو جاي منين
+  const convSnap = await convRef.get();
+  const conv = convSnap.exists ? convSnap.data() : null;
+  await convRef.set({
+    platform: "telegram",
+    externalId: chatId,
+    customerName: [msg.from?.first_name, msg.from?.last_name].filter(Boolean).join(" ") || "عميل",
+    contextPostId: postId || conv?.contextPostId || null,
+    status: conv?.status || "new",
+    aiEnabled: conv?.aiEnabled !== false,
+    lastMessage: postId ? "دخل من بوست" : "فتح البوت",
+    lastMessageAt: admin.firestore.FieldValue.serverTimestamp(),
+    createdAt: conv?.createdAt || admin.firestore.FieldValue.serverTimestamp(),
+  }, { merge: true });
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+// ============================================================
+//  العميل بعت صورة — نحاول نعرف البوست بتاعها
+// ============================================================
+/**
+ * طريقتين بالترتيب:
+ *  1) إعادة توجيه من القناة → معانا رقم الرسالة، فالمطابقة مضمونة ومجانية.
+ *  2) صورة مرفوعة (سكرين شوت مثلاً) → الذكاء الاصطناعي يقارنها بصور
+ *     آخر البوستات. مش مضمونة 100% فبنسأل العميل يأكّد.
+ */
+async function handlePhoto({ company, secretData, msg }) {
+  const companyId = company.id;
+  const chatId = String(msg.chat.id);
+  const token = decrypt(secretData.token, TOKEN_ENC_KEY.value());
+  const caption = String(msg.caption || "").trim();
+
+  let postId = null;
+  let sure = false;
+
+  // (1) إعادة توجيه من قناة الشركة — أدق حاجة ممكنة
+  const fwdMsgId = msg.forward_from_message_id;
+  if (fwdMsgId && String(msg.forward_from_chat?.id) === String(secretData.chatId)) {
+    const q = await db.collection(`companies/${companyId}/posts`)
+      .where("messageIds.telegram", "==", fwdMsgId).limit(1).get();
+    if (!q.empty) { postId = q.docs[0].id; sure = true; }
+  }
+
+  // (2) مقارنة بصور آخر البوستات بالذكاء الاصطناعي
+  if (!postId && company.features?.canUseAI !== false) {
+    try {
+      postId = await matchPhotoToPost(companyId, token, msg);
+    } catch (e) { logger.warn("photo match failed", e.message); }
+  }
+
+  // مالقيناش البوست → نطلب منه يوضّح بدل ما نخمّن سعر غلط
+  if (!postId) {
+    await telegram.sendMessage(token, chatId,
+      "وصلتني الصورة 👍 بس مقدرتش أحدد المنتج ده بالظبط.\n\n"
+      + "ممكن تبعتلي <b>اسم المنتج</b> أو تعيد توجيه البوست نفسه من القناة؟",
+      telegram.suggestKeyboard(["عايز أعرف السعر", "عايز أتكلم مع حد"]));
+
+    const convRef = db.doc(`companies/${companyId}/conversations/telegram_${chatId}`);
+    const prev = await convRef.get();
+    await convRef.set({
+      platform: "telegram", externalId: chatId,
+      customerName: [msg.from?.first_name, msg.from?.last_name].filter(Boolean).join(" ") || "عميل",
+      status: "needs_human",
+      lastMessage: "بعت صورة — مش متعرّف عليها",
+      lastMessageAt: admin.firestore.FieldValue.serverTimestamp(),
+      aiEnabled: prev.data()?.aiEnabled !== false,
+      createdAt: prev.data()?.createdAt || admin.firestore.FieldValue.serverTimestamp(),
+    }, { merge: true });
+    await convRef.collection("messages").add({
+      from: "customer", text: caption ? `[صورة] ${caption}` : "[صورة]",
+      channel: "message", createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+    return;
+  }
+
+  // عرفنا البوست → نكمّل زي أي سؤال عادي بس بسياقه
+  await handleIncoming({
+    company,
+    platform: "telegram",
+    externalId: chatId,
+    customerName: [msg.from?.first_name, msg.from?.last_name].filter(Boolean).join(" ") || "عميل",
+    text: caption || (sure ? "بسأل عن المنتج ده" : "بسأل عن المنتج اللي في الصورة دي"),
+    channel: "message",
+    contextPostId: postId,
+  });
+}
+
+/**
+ * مقارنة صورة العميل بصور آخر البوستات.
+ * بنبعت صورة العميل + صور البوستات لجيميناي ونسأله أنهي واحدة نفسها.
+ * محدود بـ 8 بوستات عشان الطلب مايكبرش ويبطّأ.
+ */
+async function matchPhotoToPost(companyId, token, msg) {
+  // أكبر مقاس متاح بيدي دقة أعلى في المقارنة
+  const photo = msg.photo ? msg.photo[msg.photo.length - 1] : null;
+  const fileId = photo?.file_id || msg.document?.file_id;
+  if (!fileId) return null;
+
+  const info = await telegram.getFile(token, fileId);
+  if (!info?.file_path) return null;
+  const res = await fetch(`https://api.telegram.org/file/bot${token}/${info.file_path}`);
+  if (!res.ok) return null;
+  const customerImg = Buffer.from(await res.arrayBuffer()).toString("base64");
+
+  const postsSnap = await db.collection(`companies/${companyId}/posts`)
+    .where("status", "==", "published")
+    .orderBy("publishedAt", "desc").limit(20).get();
+
+  const candidates = [];
+  for (const d of postsSnap.docs) {
+    const p = d.data();
+    const img = (p.media || []).find((m) => m.type === "image" && m.url);
+    if (!img) continue;
+    candidates.push({ id: d.id, url: img.url, name: p.productName || (p.caption || "").slice(0, 60) });
+    if (candidates.length >= 8) break;
+  }
+  if (!candidates.length) return null;
+
+  const images = [];
+  for (const c of candidates) {
+    try {
+      const r = await fetch(c.url);
+      if (!r.ok) continue;
+      images.push({ id: c.id, name: c.name, data: Buffer.from(await r.arrayBuffer()).toString("base64") });
+    } catch { /* صورة مش متاحة — نعديها */ }
+  }
+  if (!images.length) return null;
+
+  return identifyPost({ customerImg, candidates: images });
+}
 
 // ============================================================
 //  المعالجة الموحّدة لأي رسالة واردة من أي منصة
@@ -409,11 +599,13 @@ async function handleIncoming({ company, platform, externalId, customerName, tex
 
   // سياق البوست: لو العميل جاي من بوست معيّن، نجيب منتجه وسعره
   let postContext = null;
+  let postInfo = null;
   if (activePostId) {
     try {
       const postSnap = await db.doc(`companies/${companyId}/posts/${activePostId}`).get();
       if (postSnap.exists) {
         const pd = postSnap.data();
+        postInfo = { productName: pd.productName || "", price: Number(pd.price) || 0 };
         if (pd.price || pd.productName) {
           postContext = `العميل ده بيسأل عن بوست معيّن: "${(pd.caption || "").slice(0, 100)}"`
             + (pd.productName ? ` — المنتج: ${pd.productName}` : "")
@@ -434,6 +626,37 @@ async function handleIncoming({ company, platform, externalId, customerName, tex
     return;
   }
 
+  // ---------- تعليق بيسأل عن السعر ----------
+  // الرد العام بيبقى قالب قصير ("بعتنالك السعر في الخاص")، والتفاصيل
+  // بتروح رسالة خاصة — عشان السعر مايبانش لكل الناس في التعليقات.
+  if (channel === "comment" && result.intent === "price" && !result.isAbusive) {
+    const templates = company.ai?.commentTemplates || [];
+    if (templates.length) {
+      const publicReply = templates[Math.floor(Math.random() * templates.length)];
+      await convRef.collection("messages").add({
+        from: "ai", text: publicReply, intent: "price", channel: "comment",
+        commentId: commentId || null,
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        deliveryStatus: "pending",
+      });
+
+      // نفس الرد بتفاصيله بيتبعت خاص — ومعاه الثوابت والسعر
+      const dm = appendConstants(result.reply, company, platform, postInfo);
+      await convRef.collection("messages").add({
+        from: "ai", text: dm, intent: "price", channel: "message",
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        deliveryStatus: "pending",
+      });
+
+      await convRef.set({
+        status: "ai_handled", lastIntent: "price",
+        lastMessage: publicReply.slice(0, 120),
+        lastMessageAt: admin.firestore.FieldValue.serverTimestamp(),
+      }, { merge: true });
+      return;
+    }
+  }
+
   // تعليق مسيء → إخفاء + تسجيل، من غير رد
   if (result.isAbusive && company.features?.canUseModeration) {
     await db.collection(`companies/${companyId}/moderationLog`).add({
@@ -446,7 +669,7 @@ async function handleIncoming({ company, platform, externalId, customerName, tex
 
   // الرسائل الخاصة بيترفق معاها الثوابت المختارة؛ التعليقات العامة بتفضل مختصرة
   const finalReply = channel === "message"
-    ? appendConstants(result.reply, company, platform)
+    ? appendConstants(result.reply, company, platform, postInfo)
     : result.reply;
 
   // ⚡ الإرسال المباشر: بدل ما نستنى تريجر تاني يقرا من قاعدة البيانات ويبعت
@@ -518,10 +741,19 @@ exports.dispatchOutbound = onDocumentCreated(
         const secretSnap = await db.doc(`companies/${companyId}/secrets/telegram`).get();
         if (!secretSnap.exists) throw new Error("مفيش توكن تليجرام مربوط");
         const token = decrypt(secretSnap.data().token, TOKEN_ENC_KEY.value());
+        // في تليجرام التعليقات بتيجي من جروب النقاش، فالرد بيروح لنفس
+        // الشات — مش محتاج مسار منفصل زي فيسبوك
         await telegram.sendMessage(token, conv.externalId, msg.text);
       } else {
-        // فيسبوك/انستجرام/واتساب — هيتفعّلوا بعد اعتماد ميتا
-        await msgRef.update({ deliveryStatus: "skipped", deliveryNote: "المنصة لسه مش مربوطة" });
+        // فيسبوك/انستجرام/واتساب — هيتفعّلوا بعد اعتماد ميتا.
+        // الرد العام بيحتاج Graph API بمعرّف التعليق، والخاص بيحتاج
+        // صلاحية المراسلة — الاتنين مقفولين لحد الاعتماد.
+        await msgRef.update({
+          deliveryStatus: "skipped",
+          deliveryNote: msg.channel === "comment"
+            ? "رد عام على تعليق — محتاج اعتماد ميتا"
+            : "المنصة لسه مش مربوطة",
+        });
         return;
       }
 
@@ -541,6 +773,10 @@ async function publishOnePost(companyId, postRef, post) {
   const messageIds = {};   // معرّف الرسالة على كل منصة (لتقرير البوست)
   const audience = {};     // عدد أعضاء القناة وقت النشر
 
+  // إعدادات الشركة — منها شكل الزراير اللي تحت البوست
+  const companySnap = await db.doc(`companies/${companyId}`).get();
+  const company = companySnap.exists ? companySnap.data() : {};
+
   for (const platform of post.platforms || []) {
     try {
       let text = post.versions?.[platform] || post.caption;
@@ -552,9 +788,9 @@ async function publishOnePost(companyId, postRef, post) {
         const chatId = s.data().chatId;
         if (!chatId) throw new Error("مفيش معرّف قناة");
 
-        // زرار "اسأل عن العرض ده" تحت البوست — بيودّي البوت ومعاه معرّف البوست
-        // فلما العميل يكلّم البوت، بيعرف إنه بيسأل عن البوست ده تحديداً
-        const askBtn = telegram.askButton(s.data().botUsername, postRef.id);
+        // زراير تحت البوست بتودّي البوت ومعاها معرّف البوست، فلما العميل
+        // يكلّم البوت بيعرف إنه بيسأل عن البوست ده تحديداً
+        const askBtn = telegram.askButton(s.data().botUsername, postRef.id, company.ai?.postButtons);
 
         const media = Array.isArray(post.media) ? post.media : [];
         const photos = media.filter((m) => m.type === "image" && m.url);
@@ -1250,6 +1486,248 @@ exports.generateTemplates = onCall(async (req) => {
   }
 });
 
+/** صياغة "نشاط الشركة" من كلام صاحب المكان */
+exports.describeBusiness = onCall(async (req) => {
+  const profile = await requireProfile(req.auth);
+  const { companyId, input } = req.data || {};
+
+  if (level(profile.role) < level("manager"))
+    throw new HttpsError("permission-denied", "مش مسموح لك.");
+  const cid = companyId || profile.companyId;
+  assertCompanyAccess(profile, cid);
+
+  const raw = String(input || "").trim();
+  if (raw.length < 10) throw new HttpsError("invalid-argument", "اكتب شوية تفاصيل أكتر عن شغلك.");
+  if (raw.length > 1500) throw new HttpsError("invalid-argument", "الكلام طويل جداً.");
+
+  const snap = await db.doc(`companies/${cid}`).get();
+  if (!snap.exists) throw new HttpsError("not-found", "الشركة مش موجودة.");
+  if (snap.data().features?.canUseAI === false)
+    throw new HttpsError("permission-denied", "ميزة الذكاء الاصطناعي مقفولة للشركة دي.");
+
+  try {
+    const text = await describeBusiness({ companyName: snap.data().name, rawInput: raw });
+    if (!text) throw new Error("مرجعش نص");
+    return { ok: true, text };
+  } catch (e) {
+    logger.error("describeBusiness failed", e);
+    throw new HttpsError("internal", "تعذّر التوليد. جرّب تاني.");
+  }
+});
+
+/** كتابة بوست من صنف — بيبص على صورة الصنف لو موجودة */
+exports.postFromProduct = onCall({ timeoutSeconds: 60 }, async (req) => {
+  const profile = await requireProfile(req.auth);
+  const { companyId, name, category, subCategory, priceBefore, priceAfter, imageUrl } = req.data || {};
+
+  if (level(profile.role) < level("manager"))
+    throw new HttpsError("permission-denied", "مش مسموح لك.");
+  const cid = companyId || profile.companyId;
+  assertCompanyAccess(profile, cid);
+
+  if (!String(name || "").trim())
+    throw new HttpsError("invalid-argument", "مفيش اسم صنف.");
+
+  const snap = await db.doc(`companies/${cid}`).get();
+  if (!snap.exists) throw new HttpsError("not-found", "الشركة مش موجودة.");
+  const company = { id: cid, ...snap.data() };
+  if (company.features?.canUseAI === false)
+    throw new HttpsError("permission-denied", "ميزة الذكاء الاصطناعي مقفولة للشركة دي.");
+
+  // الصورة بتتجاب من مخزن الشركة نفسها بس — مش أي لينك خارجي
+  let imageBytes = null, imageMime = null;
+  const expected = `https://firebasestorage.googleapis.com/v0/b/${admin.storage().bucket().name}/`;
+  if (imageUrl && String(imageUrl).startsWith(expected)) {
+    try {
+      const r = await fetch(imageUrl);
+      if (r.ok) {
+        const len = Number(r.headers.get("content-length") || 0);
+        if (!len || len <= 6 * 1024 * 1024) {
+          imageMime = r.headers.get("content-type") || "image/jpeg";
+          imageBytes = Buffer.from(await r.arrayBuffer()).toString("base64");
+        }
+      }
+    } catch (e) { logger.warn("product image fetch failed", e.message); }
+  }
+
+  try {
+    const caption = await postFromProduct({
+      company,
+      product: {
+        name: String(name).slice(0, 200),
+        category: String(category || "").slice(0, 100),
+        subCategory: String(subCategory || "").slice(0, 100),
+        priceBefore: Number(priceBefore) || 0,
+        priceAfter: Number(priceAfter) || 0,
+      },
+      imageBytes, imageMime,
+    });
+    if (!caption) throw new Error("مرجعش كابشن");
+    return { ok: true, caption, usedImage: !!imageBytes };
+  } catch (e) {
+    logger.error("postFromProduct failed", e);
+    throw new HttpsError("internal", "تعذّر كتابة البوست. جرّب تاني.");
+  }
+});
+
+/** استخراج بيانات طلب من محادثة — الموظف بيراجعها قبل الحفظ */
+exports.extractOrderFromChat = onCall({ timeoutSeconds: 60 }, async (req) => {
+  const profile = await requireProfile(req.auth);
+  const { companyId, conversationId } = req.data || {};
+
+  const cid = companyId || profile.companyId;
+  assertCompanyAccess(profile, cid);
+  if (!conversationId) throw new HttpsError("invalid-argument", "مفيش محادثة.");
+
+  const snap = await db.doc(`companies/${cid}`).get();
+  if (!snap.exists) throw new HttpsError("not-found", "الشركة مش موجودة.");
+  if (snap.data().features?.canUseAI === false)
+    throw new HttpsError("permission-denied", "ميزة الذكاء الاصطناعي مقفولة للشركة دي.");
+
+  const convRef = db.doc(`companies/${cid}/conversations/${conversationId}`);
+  const [convSnap, msgsSnap, prodSnap] = await Promise.all([
+    convRef.get(),
+    convRef.collection("messages").orderBy("createdAt", "desc").limit(40).get(),
+    db.collection(`companies/${cid}/products`).limit(200).get(),
+  ]);
+  if (!convSnap.exists) throw new HttpsError("not-found", "المحادثة مش موجودة.");
+
+  const WHO = { customer: "العميل", ai: "المتجر", agent: "المتجر", note: "ملاحظة داخلية" };
+  const transcript = msgsSnap.docs.map((d) => d.data()).reverse()
+    .filter((m) => m.from !== "note" && !m.hidden)
+    .map((m) => `${WHO[m.from] || "المتجر"}: ${m.text || ""}`)
+    .join("\n");
+
+  if (!transcript.trim()) throw new HttpsError("failed-precondition", "المحادثة فاضية.");
+
+  try {
+    const data = await extractOrder({
+      transcript,
+      products: prodSnap.docs.map((d) => d.data()),
+      governorates: GOVERNORATES,
+    });
+    // اسم العميل من المنصة أدق من أي استنتاج
+    if (!data.customerName) data.customerName = convSnap.data().customerName || "";
+    return { ok: true, ...data };
+  } catch (e) {
+    logger.error("extractOrderFromChat failed", e);
+    throw new HttpsError("internal", "تعذّر قراءة الطلب من المحادثة.");
+  }
+});
+
+/**
+ * فهرسة الأصناف: بتحسب كلمات البحث لكل صنف وبتبني قايمة الأقسام.
+ *
+ * ليه على السيرفر: مسح عشرات الآلاف من المتصفح بيجيب كل البيانات
+ * للجهاز وبياخد دقايق. هنا بنقرا الحقول اللي محتاجينها بس (select)
+ * وبنكتب بـ BulkWriter.
+ */
+exports.reindexProducts = onCall({ timeoutSeconds: 540, memory: "512MiB" }, async (req) => {
+  const profile = await requireProfile(req.auth);
+  const { companyId } = req.data || {};
+
+  if (level(profile.role) < level("manager"))
+    throw new HttpsError("permission-denied", "مش مسموح لك.");
+  const cid = companyId || profile.companyId;
+  assertCompanyAccess(profile, cid);
+
+  const col = db.collection(`companies/${cid}/products`);
+  const writer = db.bulkWriter();
+  const cats = new Set();
+  const subs = {};
+
+  let scanned = 0;
+  let cursor = null;
+
+  try {
+    for (let guard = 0; guard < 500; guard++) {
+      let q = col.select("name", "barcode", "category", "subCategory")
+        .orderBy(admin.firestore.FieldPath.documentId()).limit(500);
+      if (cursor) q = q.startAfter(cursor);
+
+      const snap = await q.get();
+      if (snap.empty) break;
+
+      snap.docs.forEach((d) => {
+        const p = d.data();
+        writer.update(d.ref, { tokens: tokenize(p) }).catch(() => {});
+        scanned++;
+
+        const c = String(p.category || "").trim();
+        const s = String(p.subCategory || "").trim();
+        if (c) {
+          cats.add(c);
+          if (s) (subs[c] = subs[c] || new Set()).add(s);
+        }
+      });
+
+      cursor = snap.docs[snap.docs.length - 1];
+      if (snap.docs.length < 500) break;
+    }
+
+    await writer.close();
+
+    const meta = {
+      categories: [...cats].sort().slice(0, 1000),
+      subByCat: Object.fromEntries(
+        Object.entries(subs).slice(0, 1000)
+          .map(([k, v]) => [k, [...v].sort().slice(0, 500)])),
+      indexedAt: admin.firestore.FieldValue.serverTimestamp(),
+      indexedCount: scanned,
+      tokenVersion: TOKEN_VERSION,   // لو التقطيع اتغيّر، النظام هيطلب فهرسة جديدة
+    };
+    await db.doc(`companies/${cid}/meta/categories`).set(meta, { merge: true });
+
+    logger.info(`reindexProducts: ${scanned} products, ${cats.size} categories for ${cid}`);
+    return { ok: true, scanned, categories: meta.categories.length };
+  } catch (e) {
+    logger.error("reindexProducts failed", e);
+    throw new HttpsError("internal", "تعذّرت الفهرسة: " + e.message);
+  }
+});
+
+/**
+ * حذف كل أصناف الشركة.
+ * بيتعمل على السيرفر لأن مسح عشرات الآلاف من المتصفح بياخد دقايق
+ * وبيقف لو المستخدم قفل الصفحة. `recursiveDelete` بيستخدم BulkWriter
+ * فبيخلّص أسرع بكتير.
+ *
+ * محتاج صاحب المكان (مش مدير) + كتابة كلمة تأكيد — عملية مالهاش رجوع.
+ */
+exports.deleteAllProducts = onCall({ timeoutSeconds: 540 }, async (req) => {
+  const profile = await requireProfile(req.auth);
+  const { companyId, confirm } = req.data || {};
+
+  if (level(profile.role) < level("owner"))
+    throw new HttpsError("permission-denied", "صاحب المكان بس اللي يقدر يمسح كل الأصناف.");
+
+  const cid = companyId || profile.companyId;
+  assertCompanyAccess(profile, cid);
+
+  if (String(confirm || "").trim() !== "احذف الكل")
+    throw new HttpsError("failed-precondition", "كلمة التأكيد مش مظبوطة.");
+
+  const snap = await db.doc(`companies/${cid}`).get();
+  if (!snap.exists) throw new HttpsError("not-found", "الشركة مش موجودة.");
+
+  const col = db.collection(`companies/${cid}/products`);
+  const before = (await col.count().get()).data().count;
+
+  try {
+    await db.recursiveDelete(col);
+    // قايمة الأقسام بقت مالهاش لازمة
+    await db.doc(`companies/${cid}/meta/categories`)
+      .set({ categories: [], subByCat: {} }, { merge: true }).catch(() => {});
+
+    await audit(cid, "products_wiped", profile, { count: before });
+    logger.warn(`deleteAllProducts: ${before} products wiped from ${cid} by ${profile.uid}`);
+    return { ok: true, deleted: before };
+  } catch (e) {
+    logger.error("deleteAllProducts failed", e);
+    throw new HttpsError("internal", "تعذّر الحذف: " + e.message);
+  }
+});
+
 // ============================================================
 //  مزامنة صلاحيات التوكن للمستخدمين الحاليين
 //  بتتنادى تلقائياً أول ما المستخدم يدخل ولقى توكنه ناقص
@@ -1286,4 +1764,71 @@ exports.syncAllClaims = onCall(async (req) => {
   }
 
   return { ok: true, done, failed };
+});
+
+// ============================================================
+//  تعديل بوست منشور على المنصات
+// ============================================================
+exports.editPublishedPost = onCall({ secrets: [TOKEN_ENC_KEY] }, async (req) => {
+  const profile = await requireProfile(req.auth);
+  const { companyId, postId, caption, productName, price } = req.data || {};
+
+  if (level(profile.role) < level("manager"))
+    throw new HttpsError("permission-denied", "مش مسموح لك.");
+  const cid = companyId || profile.companyId;
+  assertCompanyAccess(profile, cid);
+
+  const postRef = db.doc(`companies/${cid}/posts/${postId}`);
+  const snap = await postRef.get();
+  if (!snap.exists) throw new HttpsError("not-found", "البوست مش موجود.");
+  const post = snap.data();
+
+  const newCaption = String(caption ?? post.caption ?? "").trim();
+  if (!newCaption) throw new HttpsError("invalid-argument", "نص البوست ماينفعش يبقى فاضي.");
+
+  const results = {};
+
+  // تليجرام: بيسمح بتعديل النص والكابشن — الصور مش بتتغير
+  if (post.messageIds?.telegram) {
+    try {
+      const s = await db.doc(`companies/${cid}/secrets/telegram`).get();
+      if (!s.exists) throw new Error("مفيش توكن تليجرام");
+      const token = decrypt(s.data().token, TOKEN_ENC_KEY.value());
+      const chatId = s.data().chatId;
+      const cSnap = await db.doc(`companies/${cid}`).get();
+      const askBtn = telegram.askButton(s.data().botUsername, postId, cSnap.data()?.ai?.postButtons);
+      const hasMedia = Array.isArray(post.media) && post.media.length > 0;
+
+      if (hasMedia) {
+        const cap = newCaption.length > 1024 ? newCaption.slice(0, 1021) + "..." : newCaption;
+        await telegram.editMessageCaption(token, chatId, post.messageIds.telegram, cap, askBtn);
+      } else {
+        await telegram.editMessageText(token, chatId, post.messageIds.telegram, newCaption, askBtn);
+      }
+      results.telegram = "edited";
+    } catch (e) {
+      const m = String(e.message);
+      // تليجرام بيرجّع الخطأ ده لو النص زي ما هو
+      results.telegram = m.includes("not modified") ? "edited" : "failed: " + m.slice(0, 120);
+      logger.warn("edit telegram post failed", m);
+    }
+  }
+
+  // فيسبوك/انستجرام هيتضافوا بعد اعتماد ميتا
+
+  await postRef.update({
+    caption: newCaption,
+    productName: String(productName ?? post.productName ?? "").trim(),
+    price: Number(price ?? post.price) || 0,
+    versions: { ...(post.versions || {}), telegram: newCaption },
+    editedAt: admin.firestore.FieldValue.serverTimestamp(),
+    editedBy: profile.name || "",
+  });
+
+  const failed = Object.entries(results).filter(([, v]) => String(v).startsWith("failed"));
+  return {
+    ok: true,
+    results,
+    warning: failed.length ? `التعديل اتحفظ في النظام، بس فشل على: ${failed.map(([p]) => p).join("، ")}` : null,
+  };
 });
