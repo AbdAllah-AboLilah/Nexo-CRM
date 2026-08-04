@@ -71,59 +71,62 @@ export async function render(root) {
   root.append(bodyRef);
 
   await goToPage(0, canEdit);
-  drawIndexBanner(canEdit);
+  autoIndex(canEdit);
 }
 
 /**
- * الأصناف المرفوعة قبل ما نضيف كلمات البحث مالهاش فهرسة، فالبحث
- * جوّه النص وقايمة الأقسام مش هيشتغلوا لحد ما نفهرسها مرة واحدة.
+ * الفهرسة بتتعمل **لوحدها**.
+ *
+ * الأصناف محتاجة مصفوفة كلمات عشان البحث والأقسام يشتغلوا. بدل ما
+ * نطلب من المستخدم يضغط زرار مش فاهم لازمته، بنشغّلها في الخلفية أول
+ * ما نلاقيها ناقصة. بنعرض شريط صغير بيقول اللي بيحصل بس.
+ *
+ * الحماية من التكرار: لو فشلت، مانعيدش المحاولة في نفس الجلسة —
+ * عشان مانفضلش نضرب السيرفر كل مرة الشاشة تتفتح.
  */
-function drawIndexBanner(canEdit) {
+let indexAttempted = false;
+
+async function autoIndex(canEdit) {
   if (!bannerRef) return;
   bannerRef.innerHTML = "";
-  if (indexed || !canEdit) return;
-  // مفيش أصناف أصلاً؟ مفيش حاجة تتفهرس
-  if (totalCount === 0) return;
+  if (indexed || !canEdit || totalCount === 0 || indexAttempted) return;
 
-  const box = el("div", { class: "ai-insight warn", style: "margin-bottom:14px" });
-  box.innerHTML = wasIndexed
-    ? `<strong>البحث اتطوّر — محتاج فهرسة جديدة</strong>
-       بقى ينفع تدوّر بأول حرف أو بجزء من الكلمة (مثلاً «موباي» تلاقي «موبايل»).
-       عشان ده يشتغل على أصنافك، لازم نعيد الفهرسة مرة واحدة.
-       العملية على السيرفر وماتأثرش على بياناتك.`
-    : `<strong>الأصناف محتاجة فهرسة</strong>
-       عشان البحث يلاقي الكلمة في أي مكان في الاسم — حتى بأول حرف —
-       وعشان قوايم الأقسام تتملي، لازم نفهرس الأصناف مرة واحدة.
-       العملية بتتنفذ على السيرفر وماتأثرش على بياناتك.`;
+  indexAttempted = true;
 
-  const btn = el("button", { class: "btn btn-primary btn-sm", style: "margin-top:12px",
-    html: `<i class="fas fa-wand-magic-sparkles"></i> ${wasIndexed ? "أعد الفهرسة" : "افهرس الأصناف دلوقتي"}` });
-  btn.addEventListener("click", () => runReindex(btn));
-  box.append(btn);
+  const box = el("div", { class: "ai-insight", style: "margin-bottom:14px" });
+  box.innerHTML = '<strong><i class="fas fa-spinner fa-spin"></i> بنجهّز البحث…</strong>'
+    + "بنفهرس الأصناف عشان تقدر تدوّر بأي كلمة أو بأول حرف. "
+    + "ممكن تكمّل شغلك عادي.";
   bannerRef.append(box);
-}
 
-async function runReindex(btn) {
-  const old = btn.innerHTML;
-  btn.disabled = true;
-  btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> بيفهرس... (ممكن ياخد دقيقة)';
   try {
     const { fns, httpsCallable } = await import("../firebase.js");
     const res = await httpsCallable(fns, "reindexProducts")({ companyId: session.companyId });
     const { scanned, categories } = res.data;
+
     indexed = true; wasIndexed = true;
     await loadKnownCategories();
     refreshSubOptions();
     catComboRef?.rebuild();
-    toast(`اتفهرس ${scanned} صنف · ${categories} قسم`, "success");
+
     bannerRef.innerHTML = "";
+    if (scanned) toast(`البحث جاهز — ${scanned} صنف · ${categories} قسم`, "success");
+
     totalCount = null;
     cursors = [];
     await goToPage(0);
   } catch (e) {
-    btn.disabled = false;
-    btn.innerHTML = old;
-    toast("فشلت الفهرسة: " + (e.message || ""), "error");
+    // فشل؟ نقول للمستخدم ونديله زرار إعادة — من غير ما نعيد لوحدنا
+    bannerRef.innerHTML = "";
+    const warn = el("div", { class: "ai-insight danger", style: "margin-bottom:14px" });
+    warn.innerHTML = `<strong>تعذّر تجهيز البحث</strong>
+      البحث بالكلمة وقوايم الأقسام مش هيشتغلوا لحد ما ده ينجح.
+      <br><small>${esc(e.message || "")}</small>`;
+    const retry = el("button", { class: "btn btn-primary btn-sm", style: "margin-top:12px",
+      html: '<i class="fas fa-rotate"></i> جرّب تاني' });
+    retry.addEventListener("click", () => { indexAttempted = false; autoIndex(canEdit); });
+    warn.append(retry);
+    bannerRef.append(warn);
   }
 }
 
@@ -1341,5 +1344,7 @@ export function destroy() {
   rows = []; cursors = []; pageIndex = 0; totalCount = null; hasNext = false;
   selected.clear();
   filters.text = ""; filters.category = ""; filters.subCategory = "";
-  tbodyRef = countRef = pagerRef = bulkRef = bodyRef = selAllRef = subComboRef = null;
+  tbodyRef = countRef = pagerRef = bulkRef = bodyRef = selAllRef = null;
+  subComboRef = catComboRef = bannerRef = null;
+  // indexAttempted بيفضل زي ما هو عن قصد — الفهرسة مرة واحدة في الجلسة
 }
