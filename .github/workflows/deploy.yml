@@ -49,31 +49,34 @@ jobs:
       # الصفحات + الدوال + قواعد الفايرستور والفهارس.
       # الملف القديم كان بيرفع الصفحات بس، فتعديل أي دالة سيرفر
       # مكانش بينزل خالص.
-      - name: رفع المشروع على Firebase
-        run: |
-          firebase deploy \
-            --project nexo-crm-28376 \
-            --only hosting,functions,firestore \
-            --non-interactive \
-            --force
+      # كل جزء لوحده: لو مفتاح الخدمة ناقصه صلاحية على جزء معيّن،
+      # الباقي ينزل عادي بدل ما الرفعة كلها تقع. الخلاصة في الآخر
+      # بتقول بالظبط إيه اللي نزل وإيه اللي لأ وإيه الحل.
+      - name: رفع الصفحات
+        id: hosting
+        continue-on-error: true
+        run: firebase deploy --project nexo-crm-28376 --only hosting --non-interactive --force
 
-      # قواعد التخزين لوحدها: محتاجة صلاحية زيادة على مفتاح الخدمة.
-      # بنرفعها بعد الباقي عشان لو فشلت يكون النظام نزل بالفعل،
-      # وبنسجّل الفشل عشان مايعديش من غير ما ناخد بالنا.
+      - name: رفع الدوال
+        id: functions
+        continue-on-error: true
+        run: firebase deploy --project nexo-crm-28376 --only functions --non-interactive --force
+
+      - name: رفع قواعد وفهارس قاعدة البيانات
+        id: firestore
+        continue-on-error: true
+        run: firebase deploy --project nexo-crm-28376 --only firestore --non-interactive --force
+
       - name: رفع قواعد التخزين
         id: storage
         continue-on-error: true
-        run: |
-          firebase deploy \
-            --project nexo-crm-28376 \
-            --only storage \
-            --non-interactive \
-            --force
+        run: firebase deploy --project nexo-crm-28376 --only storage --non-interactive --force
 
       # رقم البناء بيزيد مع كل رفعة (scripts/version.js). لازم يرجع
       # للريبو، وإلا الرفعة الجاية هتحسب من رقم قديم وتكرره.
       # [skip ci] بتمنع إن الكوميت ده يشغّل رفعة جديدة ونفضل في لفة.
       - name: حفظ رقم الإصدار الجديد
+        if: steps.hosting.outcome == 'success'
         run: |
           if git diff --quiet -- version.json; then
             echo "رقم الإصدار ما اتغيرش"
@@ -94,20 +97,46 @@ jobs:
         if: always()
         run: |
           VER=$(node -p "require('./version.json').full" 2>/dev/null || echo "غير معروف")
+          mark() { [ "$1" = "success" ] && echo "✅ نزل" || echo "❌ فشل"; }
           {
-            echo "### الرفع خلص"
+            echo "### نتيجة الرفع"
+            echo ""
+            echo "| الجزء | الحالة |"
+            echo "|---|---|"
+            echo "| الصفحات (الواجهة) | $(mark '${{ steps.hosting.outcome }}') |"
+            echo "| الدوال (السيرفر) | $(mark '${{ steps.functions.outcome }}') |"
+            echo "| قواعد وفهارس قاعدة البيانات | $(mark '${{ steps.firestore.outcome }}') |"
+            echo "| قواعد التخزين | $(mark '${{ steps.storage.outcome }}') |"
             echo ""
             echo "- **الإصدار:** $VER"
             echo "- **الرابط:** https://nexo-crm-28376.web.app"
             echo ""
-            if [ "${{ steps.storage.outcome }}" = "failure" ]; then
-              echo "> ⚠️ **قواعد التخزين ماترفعتش** — مفتاح الخدمة مالوش صلاحية عليها."
-              echo "> النظام نزل عادي، بس أي تعديل على \`storage.rules\` مش هيسري."
+            if [ "${{ steps.hosting.outcome }}${{ steps.functions.outcome }}${{ steps.firestore.outcome }}${{ steps.storage.outcome }}" != "successsuccesssuccesssuccess" ]; then
+              echo "> ⚠️ **في جزء ما نزلش** — مفتاح الخدمة ناقصه صلاحيات."
               echo ">"
-              echo "> **الحل (مرة واحدة):** افتح"
-              echo "> [صفحة الصلاحيات](https://console.cloud.google.com/iam-admin/iam?project=nexo-crm-28376)"
-              echo "> وضيف دور **Firebase Rules Admin** لمفتاح الخدمة."
+              echo "> **الحل مرة واحدة:** افتح [صفحة الصلاحيات](https://console.cloud.google.com/iam-admin/iam?project=nexo-crm-28376)،"
+              echo "> دوّر على الحساب اللي بيبدأ بـ \`firebase-adminsdk\`، اضغط القلم، وضيف الأدوار دي:"
+              echo ">"
+              echo "> - **Firebase Admin**"
+              echo "> - **Cloud Functions Admin**"
+              echo "> - **Service Account User**"
+              echo "> - **Artifact Registry Writer**"
             else
-              echo "> ✅ كل حاجة نزلت: الصفحات والدوال وقواعد الأمان والفهارس."
+              echo "> ✅ كل حاجة نزلت."
             fi
           } >> "$GITHUB_STEP_SUMMARY"
+
+      # الرفعة تُعتبر فاشلة لو أي جزء وقع — عشان مايعديش من غير ما ناخد بالنا
+      - name: التحقق النهائي
+        if: always()
+        run: |
+          FAILED=""
+          [ "${{ steps.hosting.outcome }}"   != "success" ] && FAILED="$FAILED الصفحات"
+          [ "${{ steps.functions.outcome }}" != "success" ] && FAILED="$FAILED الدوال"
+          [ "${{ steps.firestore.outcome }}" != "success" ] && FAILED="$FAILED قاعدة-البيانات"
+          [ "${{ steps.storage.outcome }}"   != "success" ] && FAILED="$FAILED التخزين"
+          if [ -n "$FAILED" ]; then
+            echo "::error::الأجزاء دي ما نزلتش:$FAILED — شوف الخلاصة فوق للحل."
+            exit 1
+          fi
+          echo "كل الأجزاء نزلت بنجاح"
