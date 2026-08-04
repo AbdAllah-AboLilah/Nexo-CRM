@@ -2,12 +2,12 @@
 //  صندوق الرسائل الموحد — شات لحظي + تحويل السيطرة + تذاكر الشكاوى
 // ============================================================
 import {
-  db, collection, doc, addDoc, updateDoc, onSnapshot, query,
-  orderBy, limit, serverTimestamp, trackSnapshot,
+  db, collection, doc, addDoc, updateDoc, getDocs, onSnapshot, query,
+  orderBy, limit, serverTimestamp, trackSnapshot, fns, httpsCallable,
 } from "../firebase.js";
-import { session, tenantPath } from "../auth.js";
+import { session, tenantPath, hasFeature, atLeast } from "../auth.js";
 import { PLATFORMS } from "../config.js";
-import { el, esc, toast, fmtTimeAgo, fmtDateTime, emptyState, modal, field } from "../ui.js";
+import { el, esc, toast, fmtTimeAgo, fmtDateTime, emptyState, modal, field, spinner } from "../ui.js";
 import { buildLinks } from "./settings.js";
 import { attachTextDraft } from "../drafts.js";
 
@@ -112,7 +112,13 @@ function subscribe() {
     const pt = document.querySelector(".platform-tabs");
     if (pt) drawPlatformTabs(pt);
     drawList();
-    if (activeId && !conversations.find((c) => c.id === activeId)) { activeId = null; showEmptyChat(); }
+
+    const active = activeId ? conversations.find((c) => c.id === activeId) : null;
+    if (activeId && !active) { activeId = null; showEmptyChat(); return; }
+
+    // رأس الشات لازم يترسم تاني مع كل تحديث — من غير كده زرار البوت
+    // والحالة بيفضلوا بالقيمة القديمة لحد ما المستخدم يعمل ريفريش
+    if (active) drawHead(active);
   }, (err) => {
     listNode.innerHTML = "";
     listNode.append(el("p", { class: "text-muted", style: "padding:16px", text: "تعذّر التحميل: " + err.message }));
@@ -226,15 +232,35 @@ function openChat(id) {
       historyNode.append(el("p", { class: "text-muted", style: "text-align:center;margin:auto", text: "مفيش رسائل في المحادثة دي." }));
       return;
     }
+    let shown = 0;
     snap.forEach((d) => {
       const m = d.data();
+      // ملاحظة متشالة من الشات — بتفضل في سجل الملاحظات
+      if (m.from === "note" && m.hidden) return;
+      shown++;
       const cls = { customer: "msg-customer", ai: "msg-ai", agent: "msg-agent", note: "msg-note" }[m.from] || "msg-customer";
       const who = { ai: "🤖 رد آلي", agent: `👤 ${m.agentName || "موظف"}`, note: "📝 ملاحظة داخلية" }[m.from] || "";
-      historyNode.append(el("div", { class: `message ${cls}` }, [
+      const bubble = el("div", { class: `message ${cls}` }, [
         el("div", { text: m.text || "" }),
         el("time", { text: `${who ? who + " · " : ""}${fmtDateTime(m.createdAt)}` }),
-      ]));
+      ]);
+      if (m.from === "note") {
+        const hide = el("button", { class: "note-hide", title: "شيلها من الشات (هتفضل في السجل)",
+          html: '<i class="fas fa-eye-slash"></i>' });
+        hide.addEventListener("click", async () => {
+          hide.disabled = true;
+          try {
+            await updateDoc(doc(db, ...tenantPath("conversations", id, "messages"), d.id), { hidden: true });
+            toast("اتشالت من الشات — لسه موجودة في سجل الملاحظات", "success");
+          } catch (e) { hide.disabled = false; toast("فشل: " + e.message, "error"); }
+        });
+        bubble.append(hide);
+      }
+      historyNode.append(bubble);
     });
+    if (!shown) {
+      historyNode.append(el("p", { class: "text-muted", style: "text-align:center;margin:auto", text: "مفيش رسائل معروضة." }));
+    }
     historyNode.scrollTop = historyNode.scrollHeight;
   });
 }
@@ -282,7 +308,131 @@ function drawHead(conv) {
   noteBtn.addEventListener("click", addNote);
   tools.append(noteBtn);
 
+  const logBtn = el("button", { class: "btn btn-ghost btn-sm", html: '<i class="fas fa-clock-rotate-left"></i> سجل الملاحظات' });
+  logBtn.addEventListener("click", () => notesLog(conv));
+  tools.append(logBtn);
+
+  // تحويل المحادثة لطلب — قواعد الطلبات بتطلب مدير فأعلى
+  if (hasFeature("canUseOrders") && atLeast("manager")) {
+    if (conv.orderId) {
+      tools.append(el("span", { class: "badge badge-green", html: '<i class="fas fa-check"></i> اتحوّلت لطلب' }));
+    } else {
+      const ordBtn = el("button", { class: "btn btn-primary btn-sm", html: '<i class="fas fa-cart-plus"></i> حوّل لطلب' });
+      ordBtn.addEventListener("click", () => convertToOrder(conv, ordBtn));
+      tools.append(ordBtn);
+    }
+  }
+
   headNode.append(tools);
+}
+
+/**
+ * تحويل المحادثة لطلب: الذكاء الاصطناعي بيقرا الكلام ويملأ الفورم،
+ * والموظف بيراجع ويعدّل قبل الحفظ — مفيش طلب بيتحفظ لوحده.
+ */
+async function convertToOrder(conv, btn) {
+  const old = btn.innerHTML;
+  btn.disabled = true;
+  btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> بيقرا المحادثة...';
+
+  let prefill = { customerName: conv.customerName || "", platform: conv.platform || "manual" };
+  let confidence = null;
+  try {
+    const res = await httpsCallable(fns, "extractOrderFromChat")({
+      companyId: session.companyId, conversationId: conv.id,
+    });
+    const d = res.data || {};
+    confidence = d.confidence;
+    prefill = {
+      customerName: d.customerName || conv.customerName || "",
+      phone: d.phone || "",
+      governorate: d.governorate || "",
+      address: d.address || "",
+      items: d.items || [],
+      notes: d.notes || "",
+      platform: conv.platform || "manual",
+      conversationId: conv.id,
+    };
+  } catch (e) {
+    toast("مقدرتش أقرا الطلب من المحادثة — املا البيانات بنفسك. (" + (e.message || "") + ")", "warn");
+    prefill.conversationId = conv.id;
+  }
+  btn.disabled = false;
+  btn.innerHTML = old;
+
+  const { orderForm } = await import("./orders.js");
+  orderForm(null, {
+    prefill,
+    onSaved: async (orderId) => {
+      await updateDoc(doc(db, ...tenantPath("conversations"), conv.id), {
+        orderId, status: "in_progress",
+      });
+      await addDoc(collection(db, ...tenantPath("conversations", conv.id, "messages")), {
+        from: "note", text: "📦 المحادثة اتحوّلت لطلب في شاشة الطلبات.",
+        agentName: session.profile.name || "", createdAt: serverTimestamp(),
+      });
+      toast("الطلب اتحفظ واتربط بالمحادثة", "success");
+    },
+  });
+
+  if (confidence === "low") {
+    toast("البيانات اللي في المحادثة ناقصة — راجع الفورم كويس قبل الحفظ", "warn");
+  }
+}
+
+/** سجل كل ملاحظات المحادثة — حتى اللي اتشالت من الشات */
+function notesLog(conv) {
+  const body = el("div");
+  body.append(spinner("جاري التحميل..."));
+
+  const m = modal({ title: `سجل ملاحظات — ${conv.customerName || "عميل"}`, body, width: 600,
+    actions: [{ label: "إغلاق", class: "btn-light", onClick: ({ close }) => close() }] });
+
+  (async () => {
+    try {
+      const snap = await getDocs(query(
+        collection(db, ...tenantPath("conversations", conv.id, "messages")),
+        orderBy("createdAt", "desc")));
+      const notes = snap.docs.map((d) => ({ id: d.id, ...d.data() })).filter((x) => x.from === "note");
+
+      body.innerHTML = "";
+      if (!notes.length) {
+        body.append(el("p", { class: "text-muted", text: "مفيش ملاحظات على المحادثة دي لسه." }));
+        return;
+      }
+      body.append(el("p", { class: "hint", style: "margin-bottom:12px",
+        text: "الملاحظات اللي بتشيلها من الشات بتفضل هنا في السجل — مفيش حاجة بتتمسح نهائي." }));
+
+      notes.forEach((n) => {
+        const row = el("div", { class: `note-log-item${n.hidden ? " hidden-note" : ""}` });
+        row.append(el("div", { class: "nl-text", text: n.text || "" }));
+        row.append(el("div", { class: "nl-meta", text:
+          `${n.agentName || "موظف"} · ${fmtTimeAgo(n.createdAt)}${n.hidden ? " · متشالة من الشات" : ""}` }));
+
+        const act = el("button", { class: "btn btn-light btn-sm",
+          html: n.hidden ? '<i class="fas fa-eye"></i> رجّعها للشات' : '<i class="fas fa-eye-slash"></i> شيلها من الشات' });
+        act.addEventListener("click", async () => {
+          act.disabled = true;
+          try {
+            await updateDoc(doc(db, ...tenantPath("conversations", conv.id, "messages"), n.id),
+              { hidden: !n.hidden });
+            n.hidden = !n.hidden;
+            row.classList.toggle("hidden-note", n.hidden);
+            act.innerHTML = n.hidden ? '<i class="fas fa-eye"></i> رجّعها للشات' : '<i class="fas fa-eye-slash"></i> شيلها من الشات';
+            toast(n.hidden ? "اتشالت من الشات — لسه في السجل" : "رجعت للشات", "success");
+          } catch (e) { toast("فشل: " + e.message, "error"); }
+          act.disabled = false;
+        });
+        row.append(act);
+        body.append(row);
+      });
+    } catch (e) {
+      body.innerHTML = "";
+      body.append(el("p", { class: "text-muted", text: "تعذّر التحميل: " + e.message }));
+    }
+  })();
+
+  return m;
 }
 
 function drawQuickActions() {

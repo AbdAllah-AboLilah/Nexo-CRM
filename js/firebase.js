@@ -12,6 +12,7 @@ import {
   collection, doc, getDoc, getDocs, setDoc, addDoc, updateDoc, deleteDoc,
   onSnapshot, query, where, orderBy, limit, serverTimestamp, increment,
   writeBatch, collectionGroup, onSnapshotsInSync, Timestamp, waitForPendingWrites,
+  startAfter, getCountFromServer,
 } from "https://www.gstatic.com/firebasejs/12.16.0/firebase-firestore.js";
 import { getFunctions, httpsCallable } from "https://www.gstatic.com/firebasejs/12.16.0/firebase-functions.js";
 import {
@@ -98,5 +99,6 @@ export {
   collection, doc, getDoc, getDocs, setDoc, addDoc, updateDoc, deleteDoc,
   onSnapshot, query, where, orderBy, limit, serverTimestamp, increment,
   writeBatch, collectionGroup, Timestamp, httpsCallable,
+  startAfter, getCountFromServer,
   storageRef, uploadBytesResumable, getDownloadURL, deleteObject,
 };

@@ -9,7 +9,7 @@ import {
 } from "../firebase.js";
 import { session, tenantPath, hasFeature } from "../auth.js";
 import { PLATFORMS, LINK_LABELS } from "../config.js";
-import { el, card, esc, toast, field, confirmBox, modal, fmtDateTime, emptyState, spinner } from "../ui.js";
+import { el, card, esc, toast, field, confirmBox, modal, fmtDateTime, emptyState, spinner, money } from "../ui.js";
 import { buildLinks } from "./settings.js";
 import { attachDraft } from "../drafts.js";
 
@@ -27,6 +27,7 @@ let state = {
   scheduleAt: "",
   previewMobile: false,
   media: [],        // [{ url, path, type, name }]
+  pickedProduct: null, // الصنف المربوط من قاعدة الأصناف
   lastCaption: null, // للتراجع عن مساعدة الذكاء الاصطناعي
 };
 
@@ -49,8 +50,9 @@ export async function render(root) {
     ]),
   ]));
 
-  const grid = el("div", { class: "grid", style: "grid-template-columns:minmax(0,1.35fr) minmax(0,1fr);align-items:start" });
-  if (window.innerWidth <= 900) grid.style.gridTemplateColumns = "1fr";
+  // التقسيم بيتحدد من CSS مش من JS — عشان يتغيّر مع دوران الشاشة
+  // وتغيير حجم النافذة، مش وقت الرسم بس
+  const grid = el("div", { class: "grid publisher-grid" });
   root.append(grid);
 
   const left = el("div");
@@ -138,14 +140,147 @@ export async function render(root) {
     aiBtns.querySelectorAll("button").forEach((b) => (b.disabled = !aiEnabled));
   }
 
+  const attachInputs = {};   // بيتملى تحت في قسم "أضف للبوست"
+
   const prodRow = el("div", { class: "form-row", style: "margin-top:14px" });
-  const productName = field({ label: "المنتج المرتبط (اختياري)", name: "product", placeholder: "باقة Nexo المتقدمة" });
+  const productName = field({ label: "المنتج المرتبط (اختياري)", name: "product", placeholder: "اكتب اسم الصنف أو الباركود..." });
   const price = field({ label: "السعر", name: "price", type: "number", placeholder: "150" });
   productName.input.addEventListener("input", () => { state.productName = productName.input.value; refresh(); });
   price.input.addEventListener("input", () => { state.price = price.input.value; refresh(); });
   prodRow.append(productName.wrap, price.wrap);
   editor.append(prodRow);
-  editor.append(el("p", { class: "hint", text: "السعر ده بيتربط بالبوست، فلما حد يعلق «بكام؟» البوت يرد بالسعر الصح للبوست ده تحديداً." }));
+
+  // ---------- ربط بقاعدة الأصناف ----------
+  // نفس الخانة بتبحث في القاعدة: تختار صنف → السعر والصورة بييجوا لوحدهم
+  productName.wrap.style.position = "relative";
+  const suggest = el("div", { class: "prod-suggest", style: "display:none" });
+  productName.wrap.append(suggest);
+
+  let searchTimer;
+  productName.input.addEventListener("input", () => {
+    clearTimeout(searchTimer);
+    const term = productName.input.value.trim();
+    if (term.length < 2) { suggest.style.display = "none"; return; }
+    searchTimer = setTimeout(() => runProductSearch(term), 250);
+  });
+  productName.input.addEventListener("blur", () => setTimeout(() => { suggest.style.display = "none"; }, 180));
+  productName.input.addEventListener("focus", () => {
+    if (suggest.children.length && productName.input.value.trim().length >= 2) suggest.style.display = "";
+  });
+
+  async function runProductSearch(term) {
+    try {
+      const { searchProducts } = await import("./products.js");
+      const hits = await searchProducts(term);
+      suggest.innerHTML = "";
+      if (!hits.length) {
+        suggest.append(el("div", { class: "prod-suggest-empty",
+          text: "مفيش نتايج — البحث بيلاقي الأصناف اللي بتبدأ بالكلمة دي، والباركود لازم يتكتب كامل." }));
+        suggest.style.display = "";
+        return;
+      }
+      hits.forEach((p) => {
+        const row = el("button", { class: "prod-suggest-item", type: "button" }, [
+          p.image ? el("img", { src: p.image, alt: "" }) : el("span", { class: "prod-thumb empty", html: '<i class="fas fa-image"></i>' }),
+          el("span", { class: "psi-text" }, [
+            el("strong", { text: p.name }),
+            el("small", { class: "text-muted", text: [p.barcode, p.category].filter(Boolean).join(" · ") || "—" }),
+          ]),
+          el("span", { class: "psi-price", text: money(p.priceAfter) }),
+        ]);
+        row.addEventListener("mousedown", (e) => { e.preventDefault(); pickProduct(p); });
+        suggest.append(row);
+      });
+      suggest.style.display = "";
+    } catch (e) {
+      suggest.style.display = "none";
+      toast("تعذّر البحث في الأصناف: " + e.message, "error");
+    }
+  }
+
+  function pickProduct(p) {
+    productName.input.value = p.name;
+    state.productName = p.name;
+    price.input.value = p.priceAfter || "";
+    state.price = String(p.priceAfter || "");
+    // مابنعلّمش خانة "السعر" لوحدنا — ده قرار صاحب البوست.
+    // السعر بيتخزّن مع البوست عشان البوت يرد بيه، وظهوره في نص
+    // البوست نفسه اختياري.
+    suggest.style.display = "none";
+    state.pickedProduct = p;
+    drawProductBanner();
+    refresh();
+    toast(`اتربط بـ "${p.name}" — السعر ${money(p.priceAfter)}`, "success");
+  }
+
+  // بانر الصنف المختار: إضافة صورته للبوست + توليد كابشن منه
+  const prodBanner = el("div", { style: "margin-top:12px" });
+  editor.append(prodBanner);
+
+  function drawProductBanner() {
+    prodBanner.innerHTML = "";
+    const p = state.pickedProduct;
+    if (!p) return;
+
+    const box = el("div", { class: "picked-product" });
+    box.append(
+      p.image ? el("img", { src: p.image, alt: "" }) : el("span", { class: "prod-thumb empty", html: '<i class="fas fa-image"></i>' }),
+      el("div", { class: "pp-text" }, [
+        el("strong", { text: p.name }),
+        el("small", { class: "text-muted", text: `مرتبط بقاعدة الأصناف · ${money(p.priceAfter)}` }),
+      ]),
+    );
+
+    const acts = el("div", { class: "pp-actions" });
+    if (p.image && !state.media.some((m) => m.url === p.image)) {
+      const addImg = el("button", { class: "chip", html: '<i class="fas fa-image"></i> ضيف صورة الصنف للبوست' });
+      addImg.addEventListener("click", () => {
+        state.media.push({ type: "image", url: p.image, name: p.name, fromProduct: true });
+        drawMedia(); drawProductBanner(); refresh();
+        toast("اتضافت صورة الصنف", "success");
+      });
+      acts.append(addImg);
+    }
+    if (aiEnabled) {
+      const gen = el("button", { class: "chip", html: '<i class="fas fa-wand-magic-sparkles"></i> اكتبلي بوست عن الصنف ده' });
+      gen.addEventListener("click", () => generateFromProduct(p, gen));
+      acts.append(gen);
+    }
+    const clear = el("button", { class: "chip", html: '<i class="fas fa-xmark"></i> فك الربط' });
+    clear.addEventListener("click", () => { state.pickedProduct = null; drawProductBanner(); });
+    acts.append(clear);
+
+    box.append(acts);
+    prodBanner.append(box);
+  }
+
+  async function generateFromProduct(p, btn) {
+    const old = btn.innerHTML;
+    btn.disabled = true;
+    btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> بيكتب...';
+    try {
+      const res = await httpsCallable(fns, "postFromProduct")({
+        companyId: session.companyId,
+        name: p.name,
+        category: p.category || "",
+        subCategory: p.subCategory || "",
+        priceBefore: p.priceBefore || 0,
+        priceAfter: p.priceAfter || 0,
+        imageUrl: p.image || "",
+      });
+      state.lastCaption = caption.value;
+      caption.value = res.data.caption || "";
+      state.caption = caption.value;
+      renderUndo(); refresh();
+      toast("الكابشن اتكتب — راجعه وعدّل زي ما تحب", "success");
+    } catch (e) {
+      toast("فشل التوليد: " + (e.message || ""), "error");
+    }
+    btn.disabled = false;
+    btn.innerHTML = old;
+  }
+
+  editor.append(el("p", { class: "hint", text: "اكتب حرفين من اسم الصنف أو الباركود وهيدوّر لك في قاعدة الأصناف ويجيب السعر والصورة لوحده." }));
   left.append(editor);
 
   // ---------- الصور والفيديو ----------
@@ -188,7 +323,10 @@ export async function render(root) {
         del.addEventListener("click", async (e) => {
           e.stopPropagation();
           if (!(await confirmBox("هتشيل الملف ده من البوست؟", { title: "حذف ملف" }))) return;
-          try { await deleteObject(storageRef(storage, m.path)); } catch { /* الملف ممكن يكون اتمسح */ }
+          // صورة جاية من قاعدة الأصناف بنشيلها من البوست بس — الأصل بيفضل مكانه
+          if (m.path && !m.fromProduct) {
+            try { await deleteObject(storageRef(storage, m.path)); } catch { /* الملف ممكن يكون اتمسح */ }
+          }
           state.media.splice(i, 1);
           drawMedia(); refresh();
         });
@@ -296,6 +434,7 @@ export async function render(root) {
   const attachGrid = el("div", { class: "grid grid-3" });
   attachDefs.forEach((a) => {
     const input = el("input", { type: "checkbox" });
+    attachInputs[a.key] = input;
     input.disabled = !a.available;
     input.checked = a.available && !!state.attach[a.key];   // نرجّع اختيار آخر بوست
     const row = el("label", { class: `check-row${input.checked ? " checked" : ""}` }, [input, el("span", { text: a.label })]);
@@ -522,43 +661,107 @@ function loadPosts(box) {
     });
 }
 
+// فلتر المنصة — تاب واحد شغّال في كل مرة. البوست الواحد بينزل على أكتر من
+// منصة، فالتابات فلتر مش تقسيم: نفس البوست بيظهر في تاب كل منصة نزل عليها.
+let platformFilter = localStorage.getItem("nexo.pubTab") || "all";
+let lastSnap = null;
+
 function drawPosts(box, snap) {
   try {
+    if (snap) lastSnap = snap; else snap = lastSnap;
+    if (!snap) return;
+
     box.innerHTML = "";
     box.append(el("h3", { class: "card-title", text: "البوستات والمجدولة" }));
+
+    // ---- التابات ----
+    const counts = { all: 0 };
+    Object.keys(PLATFORMS).forEach((k) => { counts[k] = 0; });
+    snap.forEach((d) => {
+      counts.all++;
+      (d.data().platforms || []).forEach((k) => { if (counts[k] != null) counts[k]++; });
+    });
+
+    const tabs = el("div", { class: "pub-tabs" });
+    const mkTab = (key, label, icon, color) => {
+      const active = platformFilter === key;
+      const t = el("button", {
+        class: `pub-tab${active ? " active" : ""}`,
+        style: active && color ? `--tab-color:${color}` : "",
+        html: `${icon ? `<i class="${icon}"></i> ` : ""}${esc(label)}
+               <span class="pub-tab-count">${counts[key] || 0}</span>`,
+      });
+      t.addEventListener("click", () => {
+        platformFilter = key;
+        localStorage.setItem("nexo.pubTab", key);
+        drawPosts(box, null);
+      });
+      tabs.append(t);
+    };
+    mkTab("all", "الكل", "fas fa-layer-group", "var(--primary)");
+    Object.entries(PLATFORMS).forEach(([k, v]) => {
+      if (hasFeature(v.feature)) mkTab(k, v.label, v.icon, v.color);
+    });
+    box.append(tabs);
+
     if (snap.empty) { box.append(el("p", { class: "text-muted", text: "مفيش بوستات لسه." })); return; }
 
+    let shown = 0;
     snap.forEach((d) => {
       const p = { id: d.id, ...d.data() };
+      if (platformFilter !== "all" && !(p.platforms || []).includes(platformFilter)) return;
+      shown++;
       const badges = { draft: ["badge-gray", "مسودة"], queued: ["badge-yellow", "في الانتظار"],
                        published: ["badge-green", "تم النشر"], failed: ["badge-red", "فشل"] }[p.status] || ["badge-gray", p.status];
-      const item = el("div", { class: "tenant-item", style: "cursor:default;align-items:flex-start" }, [
-        el("div", { style: "flex:1;min-width:0" }, [
-          el("strong", { text: (p.caption || "").slice(0, 60) + ((p.caption || "").length > 60 ? "..." : ""), style: "display:block" }),
-          el("small", { class: "text-muted", text: `${p.scheduledAt ? fmtDateTime(p.scheduledAt) : "فوري"} · ${(p.platforms || []).map((x) => PLATFORMS[x]?.label).join("، ") || "—"}` }),
-          p.source === "telegram"
-            ? el("small", { class: "badge badge-blue", style: "margin-top:5px",
-                text: "اتنشر من تليجرام — حط له سعر عشان البوت يرد بيه" }) : null,
+      // أيقونات المنصات — عشان يبان إن البوست الواحد نازل على أكتر من مكان
+      const icons = el("span", { class: "plat-icons" },
+        (p.platforms || []).map((k) => PLATFORMS[k]
+          ? el("i", { class: PLATFORMS[k].icon, style: `color:${PLATFORMS[k].color}`, title: PLATFORMS[k].label })
+          : null));
+
+      // التخطيط: النص في سطر لوحده والزراير تحته.
+      // قبل كده الزراير كانت جنب النص في نفس الصف، فلما العمود يضيق
+      // كان النص بيتزنق ويتكسر حرف في كل سطر.
+      const item = el("div", { class: "post-item" });
+
+      const head = el("div", { class: "post-head" }, [
+        el("div", { class: "post-text" }, [
+          el("strong", { text: (p.caption || "").slice(0, 90) + ((p.caption || "").length > 90 ? "…" : "") }),
+          el("small", { class: "post-meta" }, [
+            el("span", { text: p.scheduledAt ? fmtDateTime(p.scheduledAt) : "فوري" }),
+            icons,
+          ]),
         ]),
         el("span", { class: `badge ${badges[0]}`, text: badges[1] }),
       ]);
-      if (p.status === "published") {
-        const rep = el("button", { class: "btn btn-light btn-sm", html: '<i class="fas fa-chart-simple"></i>', title: "تقرير البوست" });
-        rep.addEventListener("click", () => postReport(p));
-        item.append(rep);
+      item.append(head);
+
+      if (p.source === "telegram") {
+        item.append(el("small", { class: "badge badge-blue post-note",
+          text: "اتنشر من تليجرام — حط له سعر عشان البوت يرد بيه" }));
       }
 
-      // تعديل: المسودات والمجدولة يتعدّلوا بالكامل؛ المنشور يتعدّل سعره بس
+      const acts = el("div", { class: "post-actions" });
+
+      if (p.status === "published") {
+        const rep = el("button", { class: "btn btn-light btn-sm",
+          html: '<i class="fas fa-chart-simple"></i> <span>تقرير</span>', title: "تقرير البوست" });
+        rep.addEventListener("click", () => postReport(p));
+        acts.append(rep);
+      }
+
+      // تعديل: المسودة والمجدول يتعدّلوا قبل النشر؛ المنشور نصّه بيتعدّل على المنصة
       const editBtn = el("button", { class: "btn btn-light btn-sm",
-        html: `<i class="fas ${p.status === "published" ? "fa-tag" : "fa-pen"}"></i>`,
-        title: p.status === "published" ? "تعديل السعر" : "تعديل البوست" });
+        html: '<i class="fas fa-pen"></i> <span>تعديل</span>',
+        title: p.status === "published" ? "تعديل البوست على المنصة" : "تعديل البوست" });
       editBtn.addEventListener("click", () => {
-        if (p.status === "published") editPrice(p);
+        if (p.status === "published") editPublished(p);
         else editPost(p);
       });
-      item.append(editBtn);
+      acts.append(editBtn);
 
-      const del = el("button", { class: "btn btn-light btn-sm", html: '<i class="fas fa-trash"></i>' });
+      const del = el("button", { class: "btn btn-light btn-sm danger-ghost",
+        html: '<i class="fas fa-trash"></i> <span>حذف</span>' });
       del.addEventListener("click", async () => {
         const msg = p.status === "published"
           ? "هتمسح البوست من النظام ومن المنصات اللي اتنشر عليها.\n\nملحوظة: تليجرام بيمنع مسح أي رسالة أقدم من 48 ساعة."
@@ -567,39 +770,64 @@ function drawPosts(box, snap) {
         await deleteDoc(doc(db, ...tenantPath("posts"), p.id));
         toast("تم الحذف", "success");   // القايمة بتتحدّث لوحدها
       });
-      item.append(del);
+      acts.append(del);
+
+      item.append(acts);
       box.append(item);
     });
+
+    if (!shown) {
+      const lbl = PLATFORMS[platformFilter]?.label || "";
+      box.append(el("p", { class: "text-muted", style: "padding:14px 4px",
+        text: `مفيش بوستات نزلت على ${lbl} لسه.` }));
+    }
   } catch (e) {
     box.innerHTML = "";
     box.append(el("p", { class: "text-muted", text: "تعذّر تحميل البوستات: " + e.message }));
   }
 }
 
-/** تعديل السعر بس (للبوست المنشور — النص اتنشر خلاص) */
-function editPrice(p) {
+/** تعديل بوست منشور — النص بيتعدّل على المنصة فعلاً */
+function editPublished(p) {
+  const caption = el("textarea", { class: "form-control", rows: 6, value: p.caption || "" });
   const productName = field({ label: "اسم المنتج", name: "pn", value: p.productName || "" });
   const price = field({ label: "السعر", name: "pr", type: "number", value: p.price || "" });
+  const hasMedia = Array.isArray(p.media) && p.media.length > 0;
+
   const body = el("div", {}, [
-    el("p", { class: "hint", style: "margin-bottom:12px",
-      text: "البوست اتنشر خلاص، فالنص مش هيتغير على المنصات. بس السعر ده اللي البوت بيرد بيه على تعليقات البوست، فتقدر تحدّثه." }),
-    productName.wrap, price.wrap,
+    el("label", { class: "field", text: "نص البوست" }), caption,
+    el("div", { class: "form-row", style: "margin-top:14px" }, [productName.wrap, price.wrap]),
+    el("div", { class: "ai-insight warn", style: "margin-top:14px", html:
+      `<strong>إيه اللي هيتغير؟</strong>
+       النص هيتعدّل على المنصات اللي اتنشر عليها فعلاً.
+       ${hasMedia ? "<br>الصور والفيديو <b>مش</b> بتتغير بعد النشر — تليجرام مابيسمحش بده." : ""}
+       <br>السعر ده اللي البوت بيرد بيه لما حد يسأل عن البوست.` }),
   ]);
+
   modal({
-    title: "تعديل سعر البوست", body,
+    title: "تعديل البوست المنشور", body, width: 620,
     actions: [
       { label: "إلغاء", class: "btn-light", onClick: ({ close }) => close() },
-      { label: "حفظ", class: "btn-primary", onClick: async ({ close, button }) => {
+      { label: "حفظ ونشر التعديل", class: "btn-primary", onClick: async ({ close, button }) => {
+        if (!caption.value.trim()) return toast("نص البوست ماينفعش يبقى فاضي", "error");
         button.disabled = true;
+        button.innerHTML = '<i class="fas fa-spinner fa-spin"></i> جاري التعديل...';
         try {
-          await updateDoc(doc(db, ...tenantPath("posts"), p.id), {
+          const res = await httpsCallable(fns, "editPublishedPost")({
+            companyId: session.companyId,
+            postId: p.id,
+            caption: caption.value.trim(),
             productName: productName.input.value.trim(),
             price: Number(price.input.value) || 0,
           });
-          toast("تم تحديث السعر", "success");
+          const w = res.data?.warning;
+          toast(w || "تم تعديل البوست على المنصات ✅", w ? "warn" : "success");
           close();
-          import("../router.js").then((r) => r.reloadCurrent());
-        } catch (e) { button.disabled = false; toast("فشل الحفظ: " + e.message, "error"); }
+        } catch (e) {
+          button.disabled = false;
+          button.textContent = "حفظ ونشر التعديل";
+          toast("فشل التعديل: " + (e.message || ""), "error");
+        }
       } },
     ],
   });

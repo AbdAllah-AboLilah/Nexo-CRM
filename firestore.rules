@@ -100,6 +100,12 @@ service cloud.firestore {
         allow write: if inCompany(cid) && roleAtLeast(60);
       }
 
+      // مستندات مساعدة (زي قايمة الأقسام) — بتتحدّث مع استيراد الأصناف
+      match /meta/{docId} {
+        allow read: if inCompany(cid);
+        allow write: if inCompany(cid) && roleAtLeast(60);
+      }
+
       match /conversations/{convId} {
         allow read: if inCompany(cid);
         allow update: if inCompany(cid) && roleAtLeast(40);
@@ -109,7 +115,15 @@ service cloud.firestore {
           allow read: if inCompany(cid);
           allow create: if inCompany(cid) && roleAtLeast(40)
                         && request.resource.data.from in ['agent','note'];
-          allow update, delete: if isSuper();
+
+          // إخفاء/إظهار ملاحظة داخلية بس — الرسالة نفسها مابتتعدلش أبداً
+          // عشان سجل الملاحظات يفضل أمين على اللي اتكتب
+          allow update: if isSuper() || (
+            inCompany(cid) && roleAtLeast(40)
+            && resource.data.from == 'note'
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['hidden'])
+          );
+          allow delete: if isSuper();
         }
       }
 

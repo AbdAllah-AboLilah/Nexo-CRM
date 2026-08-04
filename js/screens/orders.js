@@ -152,7 +152,12 @@ function viewOrder(o) {
   });
 }
 
-function orderForm(existing = null) {
+/**
+ * فورم الطلب. صندوق الرسائل بيستدعيه بـ prefill مستخرج من المحادثة،
+ * و onSaved عشان يعلّم المحادثة إنها اتحوّلت لطلب.
+ */
+export function orderForm(existing = null, { prefill = null, onSaved = null } = {}) {
+  if (prefill) existing = { ...prefill, id: undefined };
   const name = field({ label: "اسم العميل *", name: "customerName", value: existing?.customerName || "" });
   const phone = field({ label: "رقم التليفون *", name: "phone", value: existing?.phone || "" });
   const gov = field({ label: "المحافظة", name: "governorate", type: "select", value: existing?.governorate || "",
@@ -209,15 +214,21 @@ function orderForm(existing = null) {
             status: status.input.value,
             notes: notes.input.value.trim(),
             platform: existing?.platform || "manual",
+            ...(existing?.conversationId ? { conversationId: existing.conversationId } : {}),
           };
 
           button.disabled = true;
           try {
-            if (existing) await updateDoc(doc(db, ...tenantPath("orders"), existing.id), payload);
-            else await addDoc(collection(db, ...tenantPath("orders")), { ...payload, createdAt: serverTimestamp() });
+            let orderId = existing?.id;
+            if (existing?.id) await updateDoc(doc(db, ...tenantPath("orders"), existing.id), payload);
+            else {
+              const ref = await addDoc(collection(db, ...tenantPath("orders")), { ...payload, createdAt: serverTimestamp() });
+              orderId = ref.id;
+            }
             toast("تم الحفظ", "success");
             close();
-            import("../router.js").then((r) => r.reloadCurrent());
+            if (onSaved) await onSaved(orderId, payload);
+            else import("../router.js").then((r) => r.reloadCurrent());
           } catch (e) { button.disabled = false; toast("فشل الحفظ: " + e.message, "error"); }
         },
       },

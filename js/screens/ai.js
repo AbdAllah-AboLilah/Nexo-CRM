@@ -5,7 +5,7 @@ import { db, doc, updateDoc, fns, httpsCallable } from "../firebase.js";
 import { session, refreshCompany, atLeast } from "../auth.js";
 import { AI_TONES, DEFAULT_AI, PLATFORMS, LINK_LABELS } from "../config.js";
 import { buildLinks } from "./settings.js";
-import { el, card, esc, toast, field, toggle } from "../ui.js";
+import { el, card, esc, toast, field, toggle, modal } from "../ui.js";
 
 export async function render(root) {
   const c = session.company;
@@ -88,6 +88,13 @@ export async function render(root) {
     label: "تعليمات إضافية للبوت", name: "extra", type: "textarea", rows: 5, value: ai.extraInstructions || "",
     placeholder: "مثال:\n- لو حد سأل عن حاجة ملهاش علاقة بخدماتنا، جاوبه بخفة دم وفكّره بنشاطنا.\n- متأكدش أي سعر مش موجود في قائمة الأصناف.\n- لو العميل زعلان، اعتذر واعرض تحويله لخدمة العملاء.",
   });
+  // زرار توليد النشاط — صاحب المكان يكتب بلغته والذكاء الاصطناعي يصيغها
+  const genBiz = el("button", { class: "btn btn-light btn-sm",
+    html: '<i class="fas fa-wand-magic-sparkles"></i> اكتبهولي بالذكاء الاصطناعي' });
+  genBiz.addEventListener("click", () => describeBusinessDialog(businessType.input));
+  // في صف لوحده تحت الحقل — قبل كده كان بهامش سالب فبيركب على نص التوضيح
+  businessType.wrap.append(el("div", { style: "margin-top:8px" }, [genBiz]));
+
   personaBox.append(businessType.wrap, extra.wrap);
   root.append(personaBox);
 
@@ -100,6 +107,8 @@ export async function render(root) {
   const dm = { ...(DEFAULT_AI.dmAttach), ...(ai.dmAttach || {}) };
   const dmInputs = {};
   const dmDefs = [
+    { key: "price", label: "سعر المنتج اللي سأل عنه", available: true,
+      missing: "", hint: "بيظهر بس لما العميل جاي من بوست له سعر محفوظ" },
     { key: "address", label: "العنوان", available: !!k.address, missing: "اكتب العنوان في شاشة الثوابت" },
     { key: "hours", label: "مواعيد العمل", available: !!k.workingHours, missing: "اكتب المواعيد في شاشة الثوابت" },
     { key: "phones", label: "أرقام التواصل", available: !!k.phones, missing: "اكتب الأرقام في شاشة الثوابت" },
@@ -111,7 +120,7 @@ export async function render(root) {
     const t = toggle({
       label: d.label, name: `dm-${d.key}`, checked: !!dm[d.key],
       disabled: !d.available || !canEdit,
-      hint: d.available ? "" : d.missing,
+      hint: d.available ? (d.hint || "") : d.missing,
     });
     dmInputs[d.key] = t.input;
     dmGrid.append(t.row);
@@ -122,6 +131,7 @@ export async function render(root) {
   dmBox.append(dmPreview);
   const updateDmPreview = () => {
     const parts = [];
+    if (dmInputs.price.checked) parts.push("💰 تيشيرت قطن — السعر: 250 جنيه");
     if (dmInputs.address.checked && k.address) parts.push(`📍 ${k.address}`);
     if (dmInputs.hours.checked && k.workingHours) parts.push(`🕐 ${k.workingHours}`);
     if (dmInputs.phones.checked && k.phones) parts.push(`📞 ${k.phones}`);
@@ -131,13 +141,41 @@ export async function render(root) {
       const lines = Object.entries(links).map(([p, u]) => `${LINK_LABELS[p] || PLATFORMS[p]?.label || p}: ${u}`);
       if (lines.length) parts.push(lines.join("\n"));
     }
-    dmPreview.innerHTML = `<strong>معاينة (عميل جاي من تليجرام)</strong><div style="white-space:pre-wrap;font-size:13px">${
-      esc("أهلاً بيك يا فندم! سعر المنتج 150 جنيه 🌸")}${
+    dmPreview.innerHTML = `<strong>معاينة (عميل جاي من بوست على تليجرام)</strong><div style="white-space:pre-wrap;font-size:13px">${
+      esc("أهلاً بيك يا فندم! التيشيرت ده متوفر ومقاساته كاملة 🌸")}${
       parts.length ? "\n\n———\n" + esc(parts.join("\n")) : ""}</div>`;
   };
   Object.values(dmInputs).forEach((i) => i.addEventListener("change", updateDmPreview));
   updateDmPreview();
   root.append(dmBox);
+
+  // ---------- زراير البوست على تليجرام ----------
+  const btnBox = card("زراير البوست على تليجرام");
+  btnBox.append(el("p", { class: "text-muted", style: "margin-bottom:14px",
+    text: "الزراير دي بتظهر تحت كل بوست بينزل على القناة، وبتوصّل العميل للبوت." }));
+
+  const btnMode = field({
+    label: "شكل الزراير", name: "postButtons", type: "select",
+    value: ai.postButtons || "two",
+    options: [
+      { value: "two", label: "زرارين — «تفاصيل المنتج» و«تواصل معانا»" },
+      { value: "one", label: "زرار واحد — «تفاصيل المنتج» بس" },
+      { value: "none", label: "من غير زراير" },
+    ],
+  });
+  const keepStart = toggle({
+    label: "سيب كلمة /start ظاهرة في شات العميل", name: "keepStart",
+    checked: ai.keepStartCommand === true, disabled: !canEdit,
+    hint: "تليجرام بيبعت /start أوتوماتيك أول ما العميل يفتح البوت، والبوت مش بيقدر يغيّر نصها — يقدر يمسحها بس. الافتراضي إنها تتمسح والبوت يرحّب بدالها.",
+  });
+  btnBox.append(btnMode.wrap, keepStart.row);
+
+  btnBox.append(el("div", { class: "ai-insight", style: "margin-top:14px", html:
+    `<strong>إيه اللي بيحصل لما العميل يدوس؟</strong>
+     بيتفتح البوت، والبوت بيرحّب بيه ويقوله إنه بيسأل عن أنهي منتج،
+     وبيعرض عليه اقتراحات أسئلة تحت مربع الكتابة.
+     <b>مفيش رسالة بتتبعت باسمه من غير إذنه</b> — هو اللي يختار.` }));
+  root.append(btnBox);
 
   // ---------- قوالب رد التعليقات ----------
   const tplBox = card("قوالب الرد العام على التعليقات");
@@ -264,6 +302,8 @@ export async function render(root) {
             extraInstructions: extra.input.value.trim(),
             commentTemplates: templates.map((t) => t.trim()).filter(Boolean),
             dmAttach: Object.fromEntries(Object.entries(dmInputs).map(([k2, i]) => [k2, i.checked])),
+            postButtons: btnMode.input.value,
+            keepStartCommand: keepStart.input.checked,
           },
         });
         await refreshCompany();
@@ -273,6 +313,73 @@ export async function render(root) {
     });
     root.append(save);
   }
+}
+
+/** يكتب "نشاط الشركة" من كلام صاحب المكان بلغته العادية */
+function describeBusinessDialog(targetInput) {
+  const raw = el("textarea", { class: "form-control", rows: 5,
+    placeholder: "احكي بلغتك العادية:\nمثال: عندي محل موبايلات في المنصورة، ببيع أجهزة جديدة ومستعملة وإكسسوارات، وبعمل صيانة كمان." });
+  const result = el("textarea", { class: "form-control", rows: 3 });
+  const regen = el("button", { class: "btn btn-light btn-sm", style: "margin-top:8px",
+    html: '<i class="fas fa-rotate"></i> ولّد صيغة تانية' });
+  const out = el("div", { style: "display:none;margin-top:16px" }, [
+    el("label", { class: "field", text: "الصيغة المقترحة — عدّل فيها زي ما تحب" }),
+    result, regen,
+  ]);
+
+  const body = el("div", {}, [
+    el("label", { class: "field", text: "احكيلي إيه اللي شغّال فيه؟" }), raw,
+    el("p", { class: "hint", text: "الجملة دي بتدخل في تعليمات البوت، فبتأثر على كل رد بعد كده." }),
+    out,
+  ]);
+
+  let busy = false;
+  async function generate(btn) {
+    const text = raw.value.trim();
+    if (text.length < 10) { toast("اكتب شوية تفاصيل أكتر عن شغلك", "error"); return false; }
+    if (busy) return false;
+    busy = true;
+    const old = btn.innerHTML;
+    btn.disabled = true;
+    btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> بيكتب...';
+    try {
+      const res = await httpsCallable(fns, "describeBusiness")({
+        companyId: session.companyId, input: text,
+      });
+      result.value = res.data.text || "";
+      out.style.display = "";
+      return true;
+    } catch (e) {
+      toast("فشل التوليد: " + (e.message || ""), "error");
+      return false;
+    } finally {
+      busy = false;
+      btn.disabled = false;
+      btn.innerHTML = old;
+    }
+  }
+
+  const m = modal({
+    title: "توليد نشاط الشركة", body, width: 560,
+    actions: [
+      { label: "إلغاء", class: "btn-light", onClick: ({ close }) => close() },
+      { label: "ولّد", class: "btn-primary", onClick: async ({ button, close }) => {
+        // نفس الزرار بيولّد الأول، وبعد ما الصيغة تظهر بيبقى "استخدم دي"
+        if (out.style.display === "none") {
+          if (await generate(button)) button.textContent = "استخدم دي";
+          return;
+        }
+        if (!result.value.trim()) return toast("مفيش نص", "error");
+        targetInput.value = result.value.trim();
+        targetInput.dispatchEvent(new Event("input", { bubbles: true }));
+        toast("اتكتبت — اضغط «حفظ الإعدادات» عشان تتسجّل", "success");
+        close();
+      } },
+    ],
+  });
+
+  regen.addEventListener("click", () => generate(regen));
+  return m;
 }
 
 /** نفس المنطق موجود في السيرفر — ده للمعاينة بس */

@@ -5,7 +5,7 @@
 
 // الرقم الأساسي (major.minor) — غيّره بس في التحديثات الكبيرة.
 // رقم البناء الكامل بيتولّد أوتوماتيك وقت الرفع (version.json).
-export const APP_VERSION = "2.4";
+export const APP_VERSION = "2.6";
 export const APP_NAME = "Nexo";
 export const APP_TAGLINE = "نظام متكامل لإدارة الصفحات والتواصل";
 
@@ -107,7 +107,11 @@ export const DEFAULT_AI = {
   businessType: "",
   extraInstructions: "",
   // إيه اللي يترفق تلقائياً في ردود الرسائل الخاصة
-  dmAttach: { address: false, hours: false, phones: false, links: false },
+  dmAttach: { price: false, address: false, hours: false, phones: false, links: false },
+  // زراير تليجرام تحت البوست: two | one | none
+  postButtons: "two",
+  // تليجرام بيبعت /start أوتوماتيك والبوت مش بيقدر يغيّر نصها — بيمسحها بس
+  keepStartCommand: false,
   commentTemplates: [
     "بعتنالك السعر في الرسايل يا قمر 🌸",
     "شيكي على الخاص يا سكر، التفاصيل كلها هناك 📩",

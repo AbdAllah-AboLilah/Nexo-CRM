@@ -27,11 +27,20 @@ function buildLinks(k = {}) {
  * @param {string} reply      رد الذكاء الاصطناعي
  * @param {object} company    بيانات الشركة
  * @param {string} platform   المنصة اللي الرد رايح عليها (للاستبعاد الذكي)
+ * @param {object} post       البوست اللي العميل جاي منه { productName, price }
  */
-function appendConstants(reply, company, platform) {
+function appendConstants(reply, company, platform, post = null) {
   const attach = company?.ai?.dmAttach || {};
   const k = company?.constants || {};
   const parts = [];
+
+  // سعر البوست اللي العميل سأل عنه — بيتحط فوق الباقي لأنه أهم حاجة،
+  // وبس لما الرد نفسه مافيهوش الرقم عشان مايتكررش
+  if (attach.price && post?.price > 0 && !new RegExp(`(^|\\D)${post.price}(\\D|$)`).test(reply)) {
+    parts.push(post.productName
+      ? `💰 ${post.productName} — السعر: ${post.price} جنيه`
+      : `💰 السعر: ${post.price} جنيه`);
+  }
 
   if (attach.address && k.address) parts.push(`📍 ${k.address}`);
   if (attach.hours && k.workingHours) parts.push(`🕐 ${k.workingHours}`);
