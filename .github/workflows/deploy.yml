@@ -1,11 +1,19 @@
 name: Deploy to Firebase
 
-# بيشتغل أوتوماتيك مع أي تعديل على الفرع main
-# يعني تقدر تعدّل الكود من موقع GitHub على الموبايل، والنظام يتحدّث لوحده
+# بيشتغل أوتوماتيك مع أي تعديل على الفرع main.
+# يعني تقدر تعدّل الكود من موقع GitHub من الموبايل، والنظام يتحدّث لوحده.
 on:
   push:
     branches: [main]
-  workflow_dispatch:
+  workflow_dispatch:      # وكمان تقدر تشغّله بإيدك من تاب Actions
+
+# لو اتعمل push تاني والرفع لسه شغّال، بنلغي القديم ونكمّل بالجديد
+concurrency:
+  group: deploy-firebase
+  cancel-in-progress: true
+
+permissions:
+  contents: write         # عشان يقدر يرجّع رقم الإصدار للريبو
 
 jobs:
   deploy:
@@ -17,13 +25,65 @@ jobs:
         with:
           node-version: 22
 
-      - name: تثبيت مكتبات السيرفر
-        run: npm ci --prefix functions || npm install --prefix functions
+      - name: تثبيت أدوات Firebase
+        run: npm install -g firebase-tools@14
 
+      - name: تثبيت مكتبات السيرفر
+        working-directory: functions
+        run: npm ci || npm install
+
+      # مفتاح الخدمة بيتكتب في ملف مؤقت، وfirebase بيقراه من المتغير ده.
+      # الملف بيتمسح في آخر خطوة مهما حصل.
+      - name: تجهيز صلاحيات الدخول
+        env:
+          SA: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+        run: |
+          if [ -z "$SA" ]; then
+            echo "::error::سر FIREBASE_SERVICE_ACCOUNT مش متظبط في إعدادات الريبو."
+            echo "::error::روح Settings ثم Secrets and variables ثم Actions وضيفه."
+            exit 1
+          fi
+          printf '%s' "$SA" > "$RUNNER_TEMP/sa.json"
+          echo "GOOGLE_APPLICATION_CREDENTIALS=$RUNNER_TEMP/sa.json" >> "$GITHUB_ENV"
+
+      # الرفع الكامل: الصفحات + الدوال + قواعد قاعدة البيانات والتخزين
+      # + الفهارس. الملف القديم كان بيرفع الصفحات بس، فتعديل أي دالة
+      # على السيرفر مكانش بينزل.
       - name: رفع المشروع على Firebase
-        uses: FirebaseExtended/action-hosting-deploy@v0
-        with:
-          repoToken: ${{ secrets.GITHUB_TOKEN }}
-          firebaseServiceAccount: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
-          channelId: live
-          projectId: nexo-crm-28376
+        run: |
+          firebase deploy \
+            --project nexo-crm-28376 \
+            --only hosting,functions,firestore,storage \
+            --non-interactive \
+            --force
+
+      # رقم البناء بيزيد مع كل رفعة (scripts/version.js). لازم يرجع
+      # للريبو، وإلا الرفعة الجاية هتحسب من رقم قديم وتكرره.
+      # [skip ci] بتمنع إن الكوميت ده يشغّل رفعة جديدة ونفضل في لفة.
+      - name: حفظ رقم الإصدار الجديد
+        run: |
+          if git diff --quiet -- version.json; then
+            echo "رقم الإصدار ما اتغيرش"
+            exit 0
+          fi
+          VER=$(node -p "require('./version.json').full")
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add version.json
+          git commit -m "رفع تلقائي: الإصدار $VER [skip ci]"
+          git push
+
+      - name: تنظيف مفتاح الخدمة
+        if: always()
+        run: rm -f "$RUNNER_TEMP/sa.json"
+
+      - name: الخلاصة
+        if: always()
+        run: |
+          VER=$(node -p "require('./version.json').full" 2>/dev/null || echo "غير معروف")
+          {
+            echo "### الرفع خلص"
+            echo ""
+            echo "- **الإصدار:** $VER"
+            echo "- **الرابط:** https://nexo-crm-28376.web.app"
+          } >> "$GITHUB_STEP_SUMMARY"
