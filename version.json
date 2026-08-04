@@ -1,9 +1,9 @@
 {
-  "version": "2.6.15",
-  "full": "v2.6.15",
-  "build": 15,
-  "commit": "cc4fd6f",
+  "version": "2.6.16",
+  "full": "v2.6.16",
+  "build": 16,
+  "commit": "bb6f8a1",
   "builtAt": "04/08/2026",
-  "builtTime": "18:19",
+  "builtTime": "18:22",
   "base": "2.6"
 }
