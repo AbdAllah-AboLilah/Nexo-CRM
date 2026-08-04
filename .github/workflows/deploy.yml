@@ -46,14 +46,27 @@ jobs:
           printf '%s' "$SA" > "$RUNNER_TEMP/sa.json"
           echo "GOOGLE_APPLICATION_CREDENTIALS=$RUNNER_TEMP/sa.json" >> "$GITHUB_ENV"
 
-      # الرفع الكامل: الصفحات + الدوال + قواعد قاعدة البيانات والتخزين
-      # + الفهارس. الملف القديم كان بيرفع الصفحات بس، فتعديل أي دالة
-      # على السيرفر مكانش بينزل.
+      # الصفحات + الدوال + قواعد الفايرستور والفهارس.
+      # الملف القديم كان بيرفع الصفحات بس، فتعديل أي دالة سيرفر
+      # مكانش بينزل خالص.
       - name: رفع المشروع على Firebase
         run: |
           firebase deploy \
             --project nexo-crm-28376 \
-            --only hosting,functions,firestore,storage \
+            --only hosting,functions,firestore \
+            --non-interactive \
+            --force
+
+      # قواعد التخزين لوحدها: محتاجة صلاحية زيادة على مفتاح الخدمة.
+      # بنرفعها بعد الباقي عشان لو فشلت يكون النظام نزل بالفعل،
+      # وبنسجّل الفشل عشان مايعديش من غير ما ناخد بالنا.
+      - name: رفع قواعد التخزين
+        id: storage
+        continue-on-error: true
+        run: |
+          firebase deploy \
+            --project nexo-crm-28376 \
+            --only storage \
             --non-interactive \
             --force
 
@@ -86,4 +99,15 @@ jobs:
             echo ""
             echo "- **الإصدار:** $VER"
             echo "- **الرابط:** https://nexo-crm-28376.web.app"
+            echo ""
+            if [ "${{ steps.storage.outcome }}" = "failure" ]; then
+              echo "> ⚠️ **قواعد التخزين ماترفعتش** — مفتاح الخدمة مالوش صلاحية عليها."
+              echo "> النظام نزل عادي، بس أي تعديل على \`storage.rules\` مش هيسري."
+              echo ">"
+              echo "> **الحل (مرة واحدة):** افتح"
+              echo "> [صفحة الصلاحيات](https://console.cloud.google.com/iam-admin/iam?project=nexo-crm-28376)"
+              echo "> وضيف دور **Firebase Rules Admin** لمفتاح الخدمة."
+            else
+              echo "> ✅ كل حاجة نزلت: الصفحات والدوال وقواعد الأمان والفهارس."
+            fi
           } >> "$GITHUB_STEP_SUMMARY"
